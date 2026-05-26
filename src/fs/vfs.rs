@@ -98,7 +98,7 @@ pub fn parse_path(path: &str) -> VfsResult<ParsedPath<'_>> {
             path: &path[6..],
         });
     }
-
+    
     /*
         Default backend for /file.txt.
 

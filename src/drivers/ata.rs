@@ -17,23 +17,28 @@ struct AtaDrive {
 
 static mut FIRST_DRIVE: Option<AtaDrive> = None;
 
-fn wait_not_busy(io: u16) -> bool {
-    let mut spin = 100_000usize;
-
-    while spin > 0 {
+fn wait_busy_clear(io: u16) -> bool {
+    for _ in 0..100_000 {
         let status = unsafe { port::inb(io + 7) };
-
-        if status == 0xFF {
-            return false;
-        }
-
-        if (status & 0x80) == 0 {
+        if (status & 0x80) == 0 && (status & 0x01) == 0 {
             return true;
         }
-
-        spin -= 1;
+        unsafe { port::io_wait(); }
     }
+    false
+}
 
+fn wait_drq(io: u16) -> bool {
+    for _ in 0..100_000 {
+        let status = unsafe { port::inb(io + 7) };
+        if (status & 0x01) != 0 || (status & 0x20) != 0 {
+            return false;
+        }
+        if (status & 0x08) != 0 {
+            return true;
+        }
+        unsafe { port::io_wait(); }
+    }
     false
 }
 
@@ -41,16 +46,18 @@ fn identify_drive(channel: AtaChannel, drive_index: u8) -> Option<AtaDrive> {
     let io = channel.io;
     let select = if drive_index == 0 { 0xA0 } else { 0xB0 };
 
-    if !wait_not_busy(io) {
-        return None;
-    }
-
     unsafe {
         port::outb(io + 6, select);
         for _ in 0..4 {
             port::io_wait();
         }
+    }
 
+    if !wait_busy_clear(io) {
+        return None;
+    }
+
+    unsafe {
         port::outb(io + 2, 0);
         port::outb(io + 3, 0);
         port::outb(io + 4, 0);
@@ -58,49 +65,7 @@ fn identify_drive(channel: AtaChannel, drive_index: u8) -> Option<AtaDrive> {
         port::outb(io + 7, 0xEC);
     }
 
-    let mut status = unsafe { port::inb(io + 7) };
-    if status == 0 || status == 0xFF {
-        return None;
-    }
-
-    let mut spin = 100_000usize;
-    while spin > 0 {
-        status = unsafe { port::inb(io + 7) };
-
-        if (status & 0x01) != 0 || (status & 0x20) != 0 {
-            return None;
-        }
-
-        if (status & 0x80) == 0 {
-            break;
-        }
-
-        spin -= 1;
-    }
-
-    let lba_mid = unsafe { port::inb(io + 4) };
-    let lba_hi = unsafe { port::inb(io + 5) };
-
-    if lba_mid != 0 || lba_hi != 0 {
-        return None;
-    }
-
-    spin = 100_000;
-    while spin > 0 {
-        status = unsafe { port::inb(io + 7) };
-
-        if (status & 0x01) != 0 || (status & 0x20) != 0 {
-            return None;
-        }
-
-        if (status & 0x08) != 0 {
-            break;
-        }
-
-        spin -= 1;
-    }
-
-    if spin == 0 {
+    if !wait_drq(io) {
         return None;
     }
 
@@ -110,7 +75,6 @@ fn identify_drive(channel: AtaChannel, drive_index: u8) -> Option<AtaDrive> {
     }
 
     let sectors = (identify[60] as u32) | ((identify[61] as u32) << 16);
-
     if sectors == 0 {
         return None;
     }
@@ -129,15 +93,12 @@ fn first_ata_drive() -> Option<AtaDrive> {
     ];
 
     for channel in channels {
-        if let Some(drive) = identify_drive(channel, 0) {
-            return Some(drive);
-        }
-
-        if let Some(drive) = identify_drive(channel, 1) {
-            return Some(drive);
+        for drive_index in [0, 1] {
+            if let Some(drive) = identify_drive(channel, drive_index) {
+                return Some(drive);
+            }
         }
     }
-
     None
 }
 
@@ -147,13 +108,10 @@ fn get_first_drive() -> Option<AtaDrive> {
             return Some(d);
         }
     }
-
     let detected = first_ata_drive();
-
     unsafe {
         FIRST_DRIVE = detected;
     }
-
     detected
 }
 
@@ -161,7 +119,6 @@ fn read_sector_lba28(drive: AtaDrive, lba: u32, dst: &mut [u8]) -> bool {
     if dst.len() < ATA_SECTOR_SIZE {
         return false;
     }
-
     if lba > 0x0FFF_FFFF {
         return false;
     }
@@ -170,7 +127,7 @@ fn read_sector_lba28(drive: AtaDrive, lba: u32, dst: &mut [u8]) -> bool {
     let ctrl = drive.channel.ctrl;
     let head = ((lba >> 24) & 0x0F) as u8;
 
-    if !wait_not_busy(io) {
+    if !wait_busy_clear(io) {
         return false;
     }
 
@@ -187,22 +144,7 @@ fn read_sector_lba28(drive: AtaDrive, lba: u32, dst: &mut [u8]) -> bool {
         port::outb(io + 7, 0x20);
     }
 
-    let mut spin = 100_000usize;
-    while spin > 0 {
-        let status = unsafe { port::inb(io + 7) };
-
-        if (status & 0x01) != 0 || (status & 0x20) != 0 {
-            return false;
-        }
-
-        if (status & 0x08) != 0 {
-            break;
-        }
-
-        spin -= 1;
-    }
-
-    if spin == 0 {
+    if !wait_drq(io) {
         return false;
     }
 

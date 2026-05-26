@@ -30,3 +30,4 @@ target
 rootleaf.iso
 *.log
 *.img
+/disk_files
