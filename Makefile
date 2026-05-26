@@ -42,6 +42,9 @@ check-tools:
 kernel:
 	$(CARGO) build
 
+kernel-release:
+	$(CARGO) build --release
+
 limine:
 	@if [ ! -d "$(LIMINE_DIR)" ]; then \
 		git clone https://github.com/limine-bootloader/limine.git \
@@ -50,6 +53,36 @@ limine:
 			$(LIMINE_DIR); \
 	fi
 	$(MAKE) -C $(LIMINE_DIR) -j$$(nproc)
+
+iso-release: kernel limine
+	rm -rf $(ISO_ROOT)
+	mkdir -p $(ISO_ROOT)/boot/limine
+	mkdir -p $(ISO_ROOT)/EFI/BOOT
+
+	cp cfg/limine.conf $(ISO_ROOT)/boot/limine/limine.conf
+	cp target/x86_64-unknown-none/release/rootleaf_kernel $(ISO_ROOT)/boot/kernel.elf
+
+	cp $(LIMINE_DIR)/limine-bios.sys $(ISO_ROOT)/boot/limine/
+	cp $(LIMINE_DIR)/limine-bios-cd.bin $(ISO_ROOT)/boot/limine/
+	cp $(LIMINE_DIR)/limine-uefi-cd.bin $(ISO_ROOT)/boot/limine/
+
+	cp $(LIMINE_DIR)/BOOTX64.EFI $(ISO_ROOT)/EFI/BOOT/
+	cp $(LIMINE_DIR)/BOOTIA32.EFI $(ISO_ROOT)/EFI/BOOT/
+
+	$(XORRISO) -as mkisofs \
+		-b boot/limine/limine-bios-cd.bin \
+		-no-emul-boot \
+		-boot-load-size 4 \
+		-boot-info-table \
+		--efi-boot boot/limine/limine-uefi-cd.bin \
+		-efi-boot-part \
+		--efi-boot-image \
+		--protective-msdos-label \
+		-partition_offset 16 \
+		$(ISO_ROOT) \
+		-o $(ISO)
+
+	$(LIMINE_DIR)/limine bios-install $(ISO)
 
 iso: kernel limine
 	rm -rf $(ISO_ROOT)
@@ -121,6 +154,16 @@ inspect: disk
 	@command -v debugfs >/dev/null && debugfs -R "ls -p /" $(DISK_IMG) || echo "Install debugfs (e2fsprogs) to inspect ext3 images"
 
 run: iso disk
+	$(QEMU) \
+		-boot order=d \
+		-cdrom $(ISO) \
+		-drive file=$(DISK_IMG),if=ide,format=raw \
+		-m 256M \
+		-serial stdio \
+		-no-reboot \
+		-no-shutdown
+
+run-release: iso-release disk
 	$(QEMU) \
 		-boot order=d \
 		-cdrom $(ISO) \

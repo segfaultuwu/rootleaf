@@ -7,7 +7,6 @@ pub const MAX_TASKS: usize = 16;
 pub const STACK_PAGES: usize = 1;
 pub const PAGE_SIZE: usize = 4096;
 
-
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum TaskState {
     Empty,

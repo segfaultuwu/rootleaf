@@ -49,9 +49,7 @@ fn parse_header(data: &[u8]) -> Option<&Elf64Ehdr> {
         return None;
     }
 
-    let hdr = unsafe {
-        &*(data.as_ptr() as *const Elf64Ehdr)
-    };
+    let hdr = unsafe { &*(data.as_ptr() as *const Elf64Ehdr) };
 
     if &hdr.e_ident[0..4] != b"\x7fELF" {
         return None;
@@ -92,9 +90,7 @@ fn phdr_at(data: &[u8], phoff: usize, index: usize) -> Option<&Elf64Phdr> {
         return None;
     }
 
-    Some(unsafe {
-        &*(data.as_ptr().add(off) as *const Elf64Phdr)
-    })
+    Some(unsafe { &*(data.as_ptr().add(off) as *const Elf64Phdr) })
 }
 
 fn validate_phdr_table(data: &[u8], hdr: &Elf64Ehdr) -> Result<(), &'static str> {
@@ -165,18 +161,10 @@ fn load_segment(data: &[u8], ph: &Elf64Phdr) -> Result<(), &'static str> {
     let dst = vaddr as *mut u8;
 
     unsafe {
-        core::ptr::copy_nonoverlapping(
-            src.as_ptr(),
-            dst,
-            file_sz,
-        );
+        core::ptr::copy_nonoverlapping(src.as_ptr(), dst, file_sz);
 
         if mem_sz > file_sz {
-            core::ptr::write_bytes(
-                dst.add(file_sz),
-                0,
-                mem_sz - file_sz,
-            );
+            core::ptr::write_bytes(dst.add(file_sz), 0, mem_sz - file_sz);
         }
     }
 
@@ -258,10 +246,7 @@ pub fn run(data: &[u8]) -> Result<isize, &'static str> {
 
     crate::kernel::syscall::reset_process_state();
 
-    match crate::scheduler::spawn(
-        entry,
-        crate::kernel::syscall::linux_syscall as usize,
-    ) {
+    match crate::scheduler::spawn(entry, crate::kernel::syscall::linux_syscall as usize) {
         Ok(tid) => {
             crate::kernel::syscall::set_foreground_task(tid);
 

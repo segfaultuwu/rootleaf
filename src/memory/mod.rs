@@ -2,17 +2,9 @@ pub mod addr;
 pub mod frame;
 pub mod info;
 
-pub use frame::{
-    alloc_frame,
-    remaining_frames,
-};
+pub use frame::{alloc_frame, remaining_frames};
 
-pub use info::{
-    memory_info,
-    memory_type_name,
-    print_memory_map,
-    MemoryInfo,
-};
+pub use info::{MemoryInfo, memory_info, memory_type_name, print_memory_map};
 
 pub fn init() {
     if frame::init() {

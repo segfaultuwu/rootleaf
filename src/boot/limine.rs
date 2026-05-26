@@ -1,5 +1,5 @@
-use limine::request::FramebufferRequest;
 use limine::BaseRevision;
+use limine::request::FramebufferRequest;
 
 #[used]
 #[unsafe(link_section = ".requests")]

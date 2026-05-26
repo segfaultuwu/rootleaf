@@ -173,9 +173,7 @@ fn sys_write(fd: usize, buf: *const u8, len: usize) -> isize {
     }
 
     for i in 0..len {
-        let b = unsafe {
-            core::ptr::read_volatile(buf.add(i))
-        };
+        let b = unsafe { core::ptr::read_volatile(buf.add(i)) };
 
         crate::kernel::write_byte(b);
     }
@@ -202,9 +200,7 @@ fn sys_read(fd: usize, buf: *mut u8, len: usize) -> isize {
 }
 
 fn sys_read_stdin(buf: *mut u8, len: usize) -> isize {
-    let out = unsafe {
-        core::slice::from_raw_parts_mut(buf, len)
-    };
+    let out = unsafe { core::slice::from_raw_parts_mut(buf, len) };
 
     let mut read = 0usize;
 
@@ -468,9 +464,7 @@ unsafe fn write_uts_field(dst: *mut u8, text: &[u8]) {
 
 fn copy_cstr_from_user<'a>(ptr: *const u8, out: &'a mut [u8; MAX_PATH]) -> Option<&'a str> {
     for i in 0..MAX_PATH - 1 {
-        let b = unsafe {
-            core::ptr::read_volatile(ptr.add(i))
-        };
+        let b = unsafe { core::ptr::read_volatile(ptr.add(i)) };
 
         if b == 0 {
             return core::str::from_utf8(&out[..i]).ok();

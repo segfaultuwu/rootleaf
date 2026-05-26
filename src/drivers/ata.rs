@@ -15,7 +15,9 @@ struct AtaDrive {
     sectors: u32,
 }
 
-static mut FIRST_DRIVE: Option<AtaDrive> = None;
+const MAX_DRIVES: usize = 4;
+static mut ALL_DRIVES: [Option<AtaDrive>; MAX_DRIVES] = [None; MAX_DRIVES];
+static mut DRIVES_DETECTED: bool = false;
 
 fn wait_busy_clear(io: u16) -> bool {
     for _ in 0..100_000 {
@@ -23,7 +25,9 @@ fn wait_busy_clear(io: u16) -> bool {
         if (status & 0x80) == 0 && (status & 0x01) == 0 {
             return true;
         }
-        unsafe { port::io_wait(); }
+        unsafe {
+            port::io_wait();
+        }
     }
     false
 }
@@ -37,7 +41,9 @@ fn wait_drq(io: u16) -> bool {
         if (status & 0x08) != 0 {
             return true;
         }
-        unsafe { port::io_wait(); }
+        unsafe {
+            port::io_wait();
+        }
     }
     false
 }
@@ -57,6 +63,13 @@ fn identify_drive(channel: AtaChannel, drive_index: u8) -> Option<AtaDrive> {
         return None;
     }
 
+    // Check device signature: ATAPI drives set LBAmid=0x14, LBAhi=0xEB.
+    // Skip them — we only want plain ATA hard drives.
+    let (lba_mid, lba_hi) = unsafe { (port::inb(io + 4), port::inb(io + 5)) };
+    if (lba_mid == 0x14 && lba_hi == 0xEB) || (lba_mid == 0x69 && lba_hi == 0x96) {
+        return None; // ATAPI / SATA PM — not a plain disk
+    }
+
     unsafe {
         port::outb(io + 2, 0);
         port::outb(io + 3, 0);
@@ -74,6 +87,11 @@ fn identify_drive(channel: AtaChannel, drive_index: u8) -> Option<AtaDrive> {
         *word = unsafe { port::inw(io) };
     }
 
+    // Word 0 bit 15=0 means ATA device; ATAPI sets bit 15=1.
+    if identify[0] & 0x8000 != 0 {
+        return None;
+    }
+
     let sectors = (identify[60] as u32) | ((identify[61] as u32) << 16);
     if sectors == 0 {
         return None;
@@ -86,33 +104,43 @@ fn identify_drive(channel: AtaChannel, drive_index: u8) -> Option<AtaDrive> {
     })
 }
 
-fn first_ata_drive() -> Option<AtaDrive> {
+fn detect_all_drives() {
+    unsafe {
+        if DRIVES_DETECTED {
+            return;
+        }
+        DRIVES_DETECTED = true;
+    }
     let channels = [
-        AtaChannel { io: 0x1F0, ctrl: 0x3F6 },
-        AtaChannel { io: 0x170, ctrl: 0x376 },
+        AtaChannel {
+            io: 0x1F0,
+            ctrl: 0x3F6,
+        },
+        AtaChannel {
+            io: 0x170,
+            ctrl: 0x376,
+        },
     ];
-
-    for channel in channels {
-        for drive_index in [0, 1] {
-            if let Some(drive) = identify_drive(channel, drive_index) {
-                return Some(drive);
+    let mut idx = 0usize;
+    'outer: for channel in channels {
+        for drive_index in [0u8, 1u8] {
+            if idx >= MAX_DRIVES {
+                break 'outer;
             }
+            unsafe {
+                ALL_DRIVES[idx] = identify_drive(channel, drive_index);
+            }
+            idx += 1;
         }
     }
-    None
 }
 
-fn get_first_drive() -> Option<AtaDrive> {
-    unsafe {
-        if let Some(d) = FIRST_DRIVE {
-            return Some(d);
-        }
+fn get_drive(disk_idx: usize) -> Option<AtaDrive> {
+    detect_all_drives();
+    if disk_idx >= MAX_DRIVES {
+        return None;
     }
-    let detected = first_ata_drive();
-    unsafe {
-        FIRST_DRIVE = detected;
-    }
-    detected
+    unsafe { ALL_DRIVES[disk_idx] }
 }
 
 fn read_sector_lba28(drive: AtaDrive, lba: u32, dst: &mut [u8]) -> bool {
@@ -167,23 +195,34 @@ pub fn load_first_disk_image() -> Result<&'static [u8], &'static str> {
     Err("Use sector-based ATA reads; full disk preload disabled")
 }
 
-pub fn first_disk_sectors() -> Option<u32> {
-    get_first_drive().map(|d| d.sectors)
+/// Sector count for disk at `disk_idx` (0=sda, 1=sdb, ...).
+pub fn disk_sectors(disk_idx: usize) -> Option<u32> {
+    get_drive(disk_idx).map(|d| d.sectors)
 }
 
-pub fn read_first_sector(lba: u32, dst: &mut [u8; ATA_SECTOR_SIZE]) -> Result<(), &'static str> {
-    let drive = match get_first_drive() {
+/// Read one 512-byte sector from disk `disk_idx` at `lba`.
+pub fn read_sector(
+    disk_idx: usize,
+    lba: u32,
+    dst: &mut [u8; ATA_SECTOR_SIZE],
+) -> Result<(), &'static str> {
+    let drive = match get_drive(disk_idx) {
         Some(d) => d,
-        None => return Err("No ATA disk found"),
+        None => return Err("No ATA disk at that index"),
     };
-
     if lba >= drive.sectors {
         return Err("LBA out of range");
     }
-
     if !read_sector_lba28(drive, lba, dst) {
         return Err("ATA read failed");
     }
-
     Ok(())
+}
+
+// Legacy wrappers — keep existing callers compiling.
+pub fn first_disk_sectors() -> Option<u32> {
+    disk_sectors(0)
+}
+pub fn read_first_sector(lba: u32, dst: &mut [u8; ATA_SECTOR_SIZE]) -> Result<(), &'static str> {
+    read_sector(0, lba, dst)
 }

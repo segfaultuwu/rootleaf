@@ -73,7 +73,12 @@ pub fn mount(name: &str, backend: VfsBackend) -> bool {
 
         // Reject duplicates
         for m in mounts.iter_mut() {
-            if m.used && eq_ascii_ignore_case_str(name, core::str::from_utf8(&m.name[..m.len]).unwrap_or("")) {
+            if m.used
+                && eq_ascii_ignore_case_str(
+                    name,
+                    core::str::from_utf8(&m.name[..m.len]).unwrap_or(""),
+                )
+            {
                 m.backend = backend;
                 return true;
             }
@@ -100,7 +105,12 @@ pub fn unmount(name: &str) -> bool {
     unsafe {
         let mounts = &mut *MOUNTS.0.get();
         for m in mounts.iter_mut() {
-            if m.used && eq_ascii_ignore_case_str(name, core::str::from_utf8(&m.name[..m.len]).unwrap_or("")) {
+            if m.used
+                && eq_ascii_ignore_case_str(
+                    name,
+                    core::str::from_utf8(&m.name[..m.len]).unwrap_or(""),
+                )
+            {
                 m.used = false;
                 m.len = 0;
                 return true;
@@ -134,18 +144,28 @@ pub fn parse_path(path: &str) -> VfsResult<VfsPath<'_>> {
         let mounts = &*MOUNTS.0.get();
         // exact match
         for m in mounts.iter() {
-            if !m.used { continue; }
+            if !m.used {
+                continue;
+            }
             let mname = core::str::from_utf8(&m.name[..m.len]).unwrap_or("");
             if eq_ascii_ignore_case_str(path, mname) {
-                return Ok(VfsPath { backend: m.backend, path: "" });
+                return Ok(VfsPath {
+                    backend: m.backend,
+                    path: "",
+                });
             }
         }
         // prefix match
         for m in mounts.iter() {
-            if !m.used { continue; }
+            if !m.used {
+                continue;
+            }
             let mname = core::str::from_utf8(&m.name[..m.len]).unwrap_or("");
             if starts_with_mount(path, mname) {
-                return Ok(VfsPath { backend: m.backend, path: &path[mname.len()+1..] });
+                return Ok(VfsPath {
+                    backend: m.backend,
+                    path: &path[mname.len() + 1..],
+                });
             }
         }
     }
@@ -248,8 +268,7 @@ pub fn read(path: &str) -> VfsResult<&'static [u8]> {
         VfsBackend::Ramfs => {
             let relative = normalize_path(parsed.path);
 
-            crate::fs::ramfs::read(relative.as_bytes())
-                .ok_or(VfsError::NotFound)
+            crate::fs::ramfs::read(relative.as_bytes()).ok_or(VfsError::NotFound)
         }
 
         VfsBackend::Fat32 => {
@@ -333,7 +352,7 @@ pub fn write(path: &str, data: &[u8]) -> VfsResult<()> {
                 Err(VfsError::WriteFailed)
             }
         }
-        
+
         VfsBackend::Fat32 => Err(VfsError::WriteFailed),
         VfsBackend::Isofs => Err(VfsError::WriteFailed),
         VfsBackend::Ext2 => Err(VfsError::WriteFailed),
@@ -416,19 +435,30 @@ pub fn build_dev_list() -> &'static [u8] {
         let mounts = &*MOUNTS.0.get();
         let mut mount_index = 0usize;
         for m in mounts.iter() {
-            if !m.used { continue; }
-            if matches!(m.backend, VfsBackend::Dev | VfsBackend::Proc | VfsBackend::Root) {
+            if !m.used {
+                continue;
+            }
+            if matches!(
+                m.backend,
+                VfsBackend::Dev | VfsBackend::Proc | VfsBackend::Root
+            ) {
                 continue;
             }
 
             write_str(buf_ptr, 512, &mut len, mount_device_prefix(m.backend));
             write_u64(buf_ptr, 512, &mut len, mount_index as u64);
-            if len < 512 { core::ptr::write(buf_ptr.add(len), b'\n'); len += 1; }
+            if len < 512 {
+                core::ptr::write(buf_ptr.add(len), b'\n');
+                len += 1;
+            }
 
             write_str(buf_ptr, 512, &mut len, mount_device_prefix(m.backend));
             write_u64(buf_ptr, 512, &mut len, mount_index as u64);
             write_str(buf_ptr, 512, &mut len, "p1");
-            if len < 512 { core::ptr::write(buf_ptr.add(len), b'\n'); len += 1; }
+            if len < 512 {
+                core::ptr::write(buf_ptr.add(len), b'\n');
+                len += 1;
+            }
 
             mount_index += 1;
         }
@@ -444,16 +474,21 @@ pub fn build_dev_list() -> &'static [u8] {
             let nameb = [b's', b'd', letter];
             let s = core::str::from_utf8(&nameb).unwrap_or("sd?");
             write_str(buf_ptr, 512, &mut len, s);
-            if len < 512 { core::ptr::write(buf_ptr.add(len), b'\n'); len += 1; }
+            if len < 512 {
+                core::ptr::write(buf_ptr.add(len), b'\n');
+                len += 1;
+            }
 
             let partb = [b's', b'd', letter, b'1'];
             let ps = core::str::from_utf8(&partb).unwrap_or("sd?1");
             write_str(buf_ptr, 512, &mut len, ps);
-            if len < 512 { core::ptr::write(buf_ptr.add(len), b'\n'); len += 1; }
+            if len < 512 {
+                core::ptr::write(buf_ptr.add(len), b'\n');
+                len += 1;
+            }
 
             disk_index += 1;
         }
-
 
         core::slice::from_raw_parts(buf_ptr as *const u8, len)
     }
@@ -477,7 +512,7 @@ fn read_dev(path: &str) -> VfsResult<&'static [u8]> {
         "zero" => Ok(b"\0\0\0\0\0\0\0\0"),
         "console" | "tty" => Ok(b"Rootleaf framebuffer console\n"),
         "keyboard" => Ok(b"PS/2 keyboard\n"),
-            p if p.starts_with("cdrom") => Ok(b"CD-ROM drive (virtual)\n"),
+        p if p.starts_with("cdrom") => Ok(b"CD-ROM drive (virtual)\n"),
         p if p.starts_with("sd") => {
             // simple device info for sd* and sd*n
             Ok(b"SCSI disk\n")
@@ -500,9 +535,7 @@ fn read_proc(path: &str) -> VfsResult<&'static [u8]> {
         "cwd" => Ok(build_cwd()),
         "pid" => Ok(build_pid()),
         "tasks" => Ok(build_tasks()),
-        "mounts" => {
-            Ok(build_mounts())
-        }
+        "mounts" => Ok(build_mounts()),
         "meminfo" => Ok(build_meminfo()),
         "self" => {
             let pid = crate::scheduler::current_task_id();
@@ -560,7 +593,12 @@ fn build_cpuinfo() -> &'static [u8] {
 
         write_str(buf_ptr, 256, &mut len, "processor\t: 0\n");
         write_str(buf_ptr, 256, &mut len, "vendor_id\t: ");
-        write_str(buf_ptr, 256, &mut len, crate::arch::x86_64::cpu::get_cpu_vendor());
+        write_str(
+            buf_ptr,
+            256,
+            &mut len,
+            crate::arch::x86_64::cpu::get_cpu_vendor(),
+        );
         write_str(buf_ptr, 256, &mut len, "\nmodel name\t: x86_64\n");
 
         core::slice::from_raw_parts(buf_ptr as *const u8, len)
@@ -597,7 +635,12 @@ fn build_pid() -> &'static [u8] {
         let buf_ptr = (&raw mut BUF) as *mut [u8; 32] as *mut u8;
         let mut len = 0usize;
 
-        write_u64(buf_ptr, 32, &mut len, crate::scheduler::current_task_id() as u64);
+        write_u64(
+            buf_ptr,
+            32,
+            &mut len,
+            crate::scheduler::current_task_id() as u64,
+        );
         if len < 32 {
             core::ptr::write(buf_ptr.add(len), b'\n');
             len += 1;
@@ -685,7 +728,9 @@ fn build_mtab() -> &'static [u8] {
         let mounts = &*MOUNTS.0.get();
         let mut mount_index = 0usize;
         for m in mounts.iter() {
-            if !m.used { continue; }
+            if !m.used {
+                continue;
+            }
 
             let mname = core::str::from_utf8(&m.name[..m.len]).unwrap_or("");
             write_str(buf_ptr, 512, &mut len, mount_device_prefix(m.backend));

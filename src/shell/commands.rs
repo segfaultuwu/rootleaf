@@ -128,7 +128,11 @@ pub fn execute_command(command: &[u8]) {
     }
 
     if starts_with_ignore_ascii_case(command, b"CD ") || eq_ignore_ascii_case(command, b"CD") {
-        let arg = if command.len() > 2 { &command[2..] } else { b"" };
+        let arg = if command.len() > 2 {
+            &command[2..]
+        } else {
+            b""
+        };
         cd_cmd(arg);
         return;
     }
@@ -189,7 +193,8 @@ pub fn execute_command(command: &[u8]) {
     }
 
     // If the user typed a path-like token (./app.elf, /disk1/app.elf, etc.), try executing it.
-    if command.starts_with(b"./") || command.starts_with(b"/") || command.iter().any(|&c| c == b'/') {
+    if command.starts_with(b"./") || command.starts_with(b"/") || command.iter().any(|&c| c == b'/')
+    {
         elf_cmd(command);
         return;
     }
@@ -215,7 +220,10 @@ fn lsblk() {
                     let dev = parts.next().unwrap_or("");
                     let mount = parts.next().unwrap_or("");
 
-                    if !(dev.starts_with("loop") || dev.starts_with("cdrom") || dev.starts_with("sd")) {
+                    if !(dev.starts_with("loop")
+                        || dev.starts_with("cdrom")
+                        || dev.starts_with("sd"))
+                    {
                         continue;
                     }
 
@@ -318,7 +326,10 @@ fn sysinfo() {
     crate::print!("Bootloader:  Limine\n");
     crate::print!("Video:       Framebuffer\n");
     crate::print!("Keyboard:    PS/2\n");
-    crate::print!("CPU:         {}\n", crate::arch::x86_64::cpu::get_cpu_vendor());
+    crate::print!(
+        "CPU:         {}\n",
+        crate::arch::x86_64::cpu::get_cpu_vendor()
+    );
 
     let mut buf = [0u8; 20];
 
@@ -449,15 +460,26 @@ fn dir_resolved(path: &str) {
 
                     let relative = crate::fs::vfs::normalize_path(parsed.path);
 
+                    crate::drivers::serial::write_str("[cmd] FAT32 ls relative='");
+                    crate::drivers::serial::write_str(relative);
+                    crate::drivers::serial::write_str("'\n");
+
                     let result = if relative.is_empty() {
+                        /*
+                            Root of mounted FAT32 filesystem.
+                            Do NOT pass "/disk1" or "1:\" here.
+                            FAT32 driver should receive a path relative to its own root.
+                        */
                         crate::fs::fat32::print_dir("")
-                            .or_else(|_| crate::fs::fat32::print_dir("\\"))
-                            .or_else(|_| crate::fs::fat32::print_dir("1:\\"))
                     } else {
                         crate::fs::fat32::print_dir(relative)
                     };
 
                     if let Err(error) = result {
+                        crate::drivers::serial::write_str("[cmd] FAT32 ls failed: ");
+                        crate::drivers::serial::write_str(crate::fs::vfs::error_str(error));
+                        crate::drivers::serial::write_str("\n");
+
                         crate::kernel::write_raw(crate::fs::vfs::error_str(error));
                         crate::print!("\n");
                     }
@@ -902,21 +924,43 @@ fn mount_cmd(arg: &[u8]) {
 
     // skip whitespace
     i = src_end;
-    while i < arg.len() && arg[i].is_ascii_whitespace() { i += 1; }
+    while i < arg.len() && arg[i].is_ascii_whitespace() {
+        i += 1;
+    }
 
     // target
     let mut tgt_end = i;
-    while tgt_end < arg.len() && !arg[tgt_end].is_ascii_whitespace() { tgt_end += 1; }
-    let target = if i < arg.len() { trim_ascii(&arg[i..tgt_end]) } else { b"" };
+    while tgt_end < arg.len() && !arg[tgt_end].is_ascii_whitespace() {
+        tgt_end += 1;
+    }
+    let target = if i < arg.len() {
+        trim_ascii(&arg[i..tgt_end])
+    } else {
+        b""
+    };
 
     // skip whitespace to fstype
     i = tgt_end;
-    while i < arg.len() && arg[i].is_ascii_whitespace() { i += 1; }
+    while i < arg.len() && arg[i].is_ascii_whitespace() {
+        i += 1;
+    }
 
-    let fstype = if i < arg.len() { trim_ascii(&arg[i..]) } else { b"" };
+    let fstype = if i < arg.len() {
+        trim_ascii(&arg[i..])
+    } else {
+        b""
+    };
 
     if !target.is_empty() {
-        mount_with_target(source, target, if fstype.is_empty() { None } else { Some(fstype) });
+        mount_with_target(
+            source,
+            target,
+            if fstype.is_empty() {
+                None
+            } else {
+                Some(fstype)
+            },
+        );
         return;
     }
 
@@ -925,11 +969,150 @@ fn mount_cmd(arg: &[u8]) {
         || eq_ignore_ascii_case(source, b"\\DISK1")
         || eq_ignore_ascii_case(source, b"\\\\DISK1")
     {
-        mount_with_target(source, b"/disk1", if fstype.is_empty() { None } else { Some(fstype) });
+        mount_with_target(
+            source,
+            b"/disk1",
+            if fstype.is_empty() {
+                None
+            } else {
+                Some(fstype)
+            },
+        );
         return;
     }
 
     mount_image_from_path(source, None);
+}
+
+fn mount_ata_autodetect(disk_idx: usize, target_path: &str) {
+    const PROBE_BYTES: usize = 4 * 1024;
+    static mut PROBE_BUF: [u8; PROBE_BYTES] = [0u8; PROBE_BYTES];
+
+    let mut ok = true;
+
+    unsafe {
+        let probe_ptr = core::ptr::addr_of_mut!(PROBE_BUF) as *mut u8;
+
+        for i in 0..(PROBE_BYTES / 512) {
+            let mut sec = [0u8; 512];
+
+            if crate::drivers::ata::read_sector(disk_idx, i as u32, &mut sec).is_err() {
+                ok = false;
+                break;
+            }
+
+            core::ptr::copy_nonoverlapping(sec.as_ptr(), probe_ptr.add(i * 512), 512);
+        }
+    }
+
+    if !ok {
+        crate::print!("Failed to read disk\n");
+        return;
+    }
+
+    let probe: &[u8] = unsafe {
+        core::slice::from_raw_parts(core::ptr::addr_of!(PROBE_BUF) as *const u8, PROBE_BYTES)
+    };
+
+    let mut start_lba: u32 = 0;
+
+    if probe[510] == 0x55 && probe[511] == 0xAA {
+        let p_off = 446;
+
+        let p_start = (probe[p_off + 8] as u32)
+            | ((probe[p_off + 9] as u32) << 8)
+            | ((probe[p_off + 10] as u32) << 16)
+            | ((probe[p_off + 11] as u32) << 24);
+
+        let p_len = (probe[p_off + 12] as u32)
+            | ((probe[p_off + 13] as u32) << 8)
+            | ((probe[p_off + 14] as u32) << 16)
+            | ((probe[p_off + 15] as u32) << 24);
+
+        if p_start != 0 && p_len != 0 {
+            start_lba = p_start;
+        }
+    }
+
+    // Check ext2 superblock magic at partition_start*512 + 1024 + 56
+    // Superblock sits at byte 1024 from partition start.
+    // We need to read it from the disk directly.
+    let sb_lba = start_lba + 2; // 1024 bytes in = 2 sectors from partition start
+    let mut sb_sec = [0u8; 512];
+    let mut sb_sec2 = [0u8; 512];
+    let is_ext2 = if crate::drivers::ata::read_sector(disk_idx, sb_lba, &mut sb_sec).is_ok()
+        && crate::drivers::ata::read_sector(disk_idx, sb_lba + 1, &mut sb_sec2).is_ok()
+    {
+        // ext2 magic is at offset 56 within the superblock (= byte 1024+56 from partition start)
+        // sector 2 of partition = bytes 0..511, magic at byte 56
+        let magic = (sb_sec[56] as u16) | ((sb_sec[57] as u16) << 8);
+        magic == 0xEF53
+    } else {
+        false
+    };
+
+    if is_ext2 {
+        // Load up to 64 MiB of the partition into the ext2 buffer
+        const MAX_EXT2: usize = 64 * 1024 * 1024;
+        static mut EXT2_BUF: [u8; MAX_EXT2] = [0u8; MAX_EXT2];
+
+        let total_sectors = match crate::drivers::ata::disk_sectors(disk_idx) {
+            Some(s) => s as usize,
+            None => {
+                crate::print!("No disk\n");
+                return;
+            }
+        };
+        let part_sectors = if start_lba > 0 {
+            total_sectors.saturating_sub(start_lba as usize)
+        } else {
+            total_sectors
+        };
+        let sectors_to_read = core::cmp::min(part_sectors, MAX_EXT2 / 512);
+
+        unsafe {
+            for i in 0..sectors_to_read {
+                let lba = start_lba + i as u32;
+                let dst = &mut EXT2_BUF[i * 512..(i + 1) * 512];
+                let mut sec = [0u8; 512];
+                if crate::drivers::ata::read_sector(disk_idx, lba, &mut sec).is_err() {
+                    crate::print!("Read error during ext2 load\n");
+                    return;
+                }
+                dst.copy_from_slice(&sec);
+            }
+
+            let data: &'static [u8] = &EXT2_BUF[..sectors_to_read * 512];
+            if crate::fs::ext2::mount(data) {
+                let _ = crate::fs::vfs::mount(target_path, crate::fs::vfs::VfsBackend::Ext2);
+                if !eq_ignore_ascii_case(target_path.as_bytes(), b"disk1") {
+                    let _ = crate::fs::vfs::mount("disk1", crate::fs::vfs::VfsBackend::Ext2);
+                }
+                crate::kernel::write_raw("Mounted ext2 disk at ");
+                crate::kernel::write_raw(target_path);
+                crate::print!("\n");
+            } else {
+                crate::print!("Failed to mount as ext2\n");
+            }
+        }
+    } else {
+        // Try FAT32
+        match crate::fs::fat32::mount_ata(disk_idx) {
+            Ok(()) => {
+                let _ = crate::fs::vfs::mount(target_path, crate::fs::vfs::VfsBackend::Fat32);
+                if !eq_ignore_ascii_case(target_path.as_bytes(), b"disk1") {
+                    let _ = crate::fs::vfs::mount("disk1", crate::fs::vfs::VfsBackend::Fat32);
+                }
+                crate::kernel::write_raw("Mounted fat32 disk at ");
+                crate::kernel::write_raw(target_path);
+                crate::print!("\n");
+            }
+            Err(message) => {
+                crate::kernel::write_raw(message);
+                crate::print!("\n");
+            }
+        }
+    }
 }
 
 fn mount_with_target(source: &[u8], target: &[u8], fstype: Option<&[u8]>) {
@@ -950,7 +1133,8 @@ fn mount_with_target(source: &[u8], target: &[u8], fstype: Option<&[u8]>) {
     {
         let st = crate::drivers::pci::scan_storage();
         let ata = crate::drivers::pci::scan_legacy_ata();
-        let detected = st.total() > 0 || ata.channels > 0 || ata.ata_devices > 0 || ata.atapi_devices > 0;
+        let detected =
+            st.total() > 0 || ata.channels > 0 || ata.ata_devices > 0 || ata.atapi_devices > 0;
 
         if !detected {
             crate::print!("Disk 1 is not detected\n");
@@ -984,8 +1168,26 @@ fn mount_with_target(source: &[u8], target: &[u8], fstype: Option<&[u8]>) {
             let dev = &devstr[5..];
 
             if dev.starts_with("sd") {
-                // parse partition number if present: e.g. sda1 -> part 1
+                // Parse disk letter to index: sda=0, sdb=1, ...
+                let disk_idx = if dev.len() >= 3 {
+                    let letter = dev.as_bytes()[2];
+
+                    if letter < b'a' || letter > b'z' {
+                        crate::print!("Invalid disk name\n");
+                        after_vfs_op();
+                        return;
+                    }
+
+                    (letter - b'a') as usize
+                } else {
+                    crate::print!("Invalid disk name\n");
+                    after_vfs_op();
+                    return;
+                };
+
+                // Parse partition number if present: sda1 -> part 1
                 let mut part_idx: Option<usize> = None;
+
                 for (i, c) in dev.chars().enumerate() {
                     if c.is_ascii_digit() {
                         part_idx = Some(i);
@@ -993,29 +1195,17 @@ fn mount_with_target(source: &[u8], target: &[u8], fstype: Option<&[u8]>) {
                     }
                 }
 
-                // If no partition number and no explicit fstype, fallback to mount_first_ata
+                // If no partition number and no explicit fstype, mount whole disk with auto-detect.
                 if part_idx.is_none() && fstype.is_none() {
-                    match crate::fs::fat32::mount_first_ata() {
-                        Ok(()) => {
-                            let _ = crate::fs::vfs::mount(target_path, crate::fs::vfs::VfsBackend::Fat32);
-                            crate::kernel::write_raw("Mounted physical ATA disk at ");
-                            crate::kernel::write_raw(target_path);
-                            crate::print!("\n");
-                        }
-                        Err(message) => {
-                            crate::kernel::write_raw(message);
-                            crate::print!("\n");
-                        }
-                    }
-
+                    mount_ata_autodetect(disk_idx, target_path);
                     after_vfs_op();
                     return;
                 }
 
-                // Need partition number to mount specific partition
+                // Need partition number to mount specific partition.
                 let part = if let Some(idx) = part_idx {
-                    // partition string is the digits after idx
                     let digs = &dev[idx..];
+
                     if let Ok(n) = digs.parse::<usize>() {
                         n
                     } else {
@@ -1029,9 +1219,16 @@ fn mount_with_target(source: &[u8], target: &[u8], fstype: Option<&[u8]>) {
                     return;
                 };
 
+                // Parse disk letter to index: sda=0, sdb=1, ...
+                let disk_idx = if dev.len() >= 3 {
+                    (dev.as_bytes()[2].wrapping_sub(b'a')) as usize
+                } else {
+                    0
+                };
+
                 // Read MBR sector to find partition start LBA
                 let mut sector = [0u8; 512];
-                if crate::drivers::ata::read_first_sector(0, &mut sector).is_err() {
+                if crate::drivers::ata::read_sector(disk_idx, 0, &mut sector).is_err() {
                     crate::print!("Failed to read disk MBR\n");
                     after_vfs_op();
                     return;
@@ -1066,7 +1263,9 @@ fn mount_with_target(source: &[u8], target: &[u8], fstype: Option<&[u8]>) {
                 static mut TMP_BUF: [u8; MAX_BYTES] = [0u8; MAX_BYTES];
 
                 let mut bytes_to_read = (num_sectors as usize).saturating_mul(512);
-                if bytes_to_read > MAX_BYTES { bytes_to_read = MAX_BYTES; }
+                if bytes_to_read > MAX_BYTES {
+                    bytes_to_read = MAX_BYTES;
+                }
 
                 let sectors_to_read = (bytes_to_read + 511) / 512;
 
@@ -1074,7 +1273,7 @@ fn mount_with_target(source: &[u8], target: &[u8], fstype: Option<&[u8]>) {
                 for i in 0..sectors_to_read {
                     let lba = start_lba.wrapping_add(i as u32);
                     let mut sec = [0u8; 512];
-                    if crate::drivers::ata::read_first_sector(lba, &mut sec).is_err() {
+                    if crate::drivers::ata::read_sector(disk_idx, lba, &mut sec).is_err() {
                         crate::print!("Failed to read partition sector\n");
                         after_vfs_op();
                         return;
@@ -1099,14 +1298,18 @@ fn mount_with_target(source: &[u8], target: &[u8], fstype: Option<&[u8]>) {
                                 crate::drivers::serial::write_str("\n");
                                 if written >= 2048 {
                                     let magic_off = 1024 + 56;
-                                    let magic = ((TMP_BUF[magic_off + 1] as u16) << 8) | (TMP_BUF[magic_off] as u16);
+                                    let magic = ((TMP_BUF[magic_off + 1] as u16) << 8)
+                                        | (TMP_BUF[magic_off] as u16);
                                     crate::drivers::serial::write_str("[mount] ext2 magic=0x");
                                     crate::drivers::serial::write_hex(magic as usize);
                                     crate::drivers::serial::write_str("\n");
                                 }
 
                                 if crate::fs::ext2::mount(&TMP_BUF[..written]) {
-                                    let _ = crate::fs::vfs::mount(target_path, crate::fs::vfs::VfsBackend::Ext2);
+                                    let _ = crate::fs::vfs::mount(
+                                        target_path,
+                                        crate::fs::vfs::VfsBackend::Ext2,
+                                    );
                                     crate::kernel::write_raw("Mounted ext2/3 partition at ");
                                     crate::kernel::write_raw(target_path);
                                     crate::print!("\n");
@@ -1115,23 +1318,27 @@ fn mount_with_target(source: &[u8], target: &[u8], fstype: Option<&[u8]>) {
                                 }
                             }
                         }
-                        Ok("isofs") | Ok("iso9660") | Ok("iso") | Ok("cdrom") => {
-                            unsafe {
-                                if crate::fs::isofs::mount(&TMP_BUF[..written]) {
-                                    let _ = crate::fs::vfs::mount(target_path, crate::fs::vfs::VfsBackend::Isofs);
-                                    crate::kernel::write_raw("Mounted ISO9660 partition at ");
-                                    crate::kernel::write_raw(target_path);
-                                    crate::print!("\n");
-                                } else {
-                                    crate::print!("Failed to mount ISO9660 partition\n");
-                                }
+                        Ok("isofs") | Ok("iso9660") | Ok("iso") | Ok("cdrom") => unsafe {
+                            if crate::fs::isofs::mount(&TMP_BUF[..written]) {
+                                let _ = crate::fs::vfs::mount(
+                                    target_path,
+                                    crate::fs::vfs::VfsBackend::Isofs,
+                                );
+                                crate::kernel::write_raw("Mounted ISO9660 partition at ");
+                                crate::kernel::write_raw(target_path);
+                                crate::print!("\n");
+                            } else {
+                                crate::print!("Failed to mount ISO9660 partition\n");
                             }
-                        }
+                        },
                         Ok("fat32") => {
                             // for FAT32 we can mount the partition by loading sectors into fat32's Memory mount
                             unsafe {
                                 if crate::fs::fat32::mount(&TMP_BUF[..written]) {
-                                    let _ = crate::fs::vfs::mount(target_path, crate::fs::vfs::VfsBackend::Fat32);
+                                    let _ = crate::fs::vfs::mount(
+                                        target_path,
+                                        crate::fs::vfs::VfsBackend::Fat32,
+                                    );
                                     crate::kernel::write_raw("Mounted FAT32 partition at ");
                                     crate::kernel::write_raw(target_path);
                                     crate::print!("\n");
@@ -1175,7 +1382,10 @@ fn mount_image_from_path(path_arg: &[u8], target_and_type: Option<(&str, Option<
                             match core::str::from_utf8(ft) {
                                 Ok("fat32") => {
                                     if crate::fs::fat32::mount(data) {
-                                        let _ = crate::fs::vfs::mount(target_path, crate::fs::vfs::VfsBackend::Fat32);
+                                        let _ = crate::fs::vfs::mount(
+                                            target_path,
+                                            crate::fs::vfs::VfsBackend::Fat32,
+                                        );
                                         crate::kernel::write_raw("Mounted FAT32 image at ");
                                         crate::kernel::write_raw(target_path);
                                         crate::print!("\n");
@@ -1185,7 +1395,10 @@ fn mount_image_from_path(path_arg: &[u8], target_and_type: Option<(&str, Option<
                                 }
                                 Ok("Ext2") => {
                                     if crate::fs::ext2::mount(data) {
-                                        let _ = crate::fs::vfs::mount(target_path, crate::fs::vfs::VfsBackend::Ext2);
+                                        let _ = crate::fs::vfs::mount(
+                                            target_path,
+                                            crate::fs::vfs::VfsBackend::Ext2,
+                                        );
                                         crate::kernel::write_raw("Mounted Ext2 image at ");
                                         crate::kernel::write_raw(target_path);
                                         crate::print!("\n");
@@ -1195,7 +1408,10 @@ fn mount_image_from_path(path_arg: &[u8], target_and_type: Option<(&str, Option<
                                 }
                                 Ok("isofs") | Ok("iso9660") | Ok("iso") => {
                                     if crate::fs::isofs::mount(data) {
-                                        let _ = crate::fs::vfs::mount(target_path, crate::fs::vfs::VfsBackend::Isofs);
+                                        let _ = crate::fs::vfs::mount(
+                                            target_path,
+                                            crate::fs::vfs::VfsBackend::Isofs,
+                                        );
                                         crate::kernel::write_raw("Mounted ISO9660 image at ");
                                         crate::kernel::write_raw(target_path);
                                         crate::print!("\n");
@@ -1205,7 +1421,10 @@ fn mount_image_from_path(path_arg: &[u8], target_and_type: Option<(&str, Option<
                                 }
                                 Ok("cdrom") => {
                                     if crate::fs::isofs::mount(data) {
-                                        let _ = crate::fs::vfs::mount(target_path, crate::fs::vfs::VfsBackend::Isofs);
+                                        let _ = crate::fs::vfs::mount(
+                                            target_path,
+                                            crate::fs::vfs::VfsBackend::Isofs,
+                                        );
                                         crate::kernel::write_raw("Mounted CD-ROM image at ");
                                         crate::kernel::write_raw(target_path);
                                         crate::print!("\n");
@@ -1214,19 +1433,28 @@ fn mount_image_from_path(path_arg: &[u8], target_and_type: Option<(&str, Option<
                                     }
                                 }
                                 Ok("ramfs") | Ok("ram") => {
-                                    let _ = crate::fs::vfs::mount(target_path, crate::fs::vfs::VfsBackend::Ramfs);
+                                    let _ = crate::fs::vfs::mount(
+                                        target_path,
+                                        crate::fs::vfs::VfsBackend::Ramfs,
+                                    );
                                     crate::kernel::write_raw("Mounted ramfs at ");
                                     crate::kernel::write_raw(target_path);
                                     crate::print!("\n");
                                 }
                                 Ok("dev") => {
-                                    let _ = crate::fs::vfs::mount(target_path, crate::fs::vfs::VfsBackend::Dev);
+                                    let _ = crate::fs::vfs::mount(
+                                        target_path,
+                                        crate::fs::vfs::VfsBackend::Dev,
+                                    );
                                     crate::kernel::write_raw("Mounted devfs at ");
                                     crate::kernel::write_raw(target_path);
                                     crate::print!("\n");
                                 }
                                 Ok("proc") => {
-                                    let _ = crate::fs::vfs::mount(target_path, crate::fs::vfs::VfsBackend::Proc);
+                                    let _ = crate::fs::vfs::mount(
+                                        target_path,
+                                        crate::fs::vfs::VfsBackend::Proc,
+                                    );
                                     crate::kernel::write_raw("Mounted procfs at ");
                                     crate::kernel::write_raw(target_path);
                                     crate::print!("\n");
@@ -1238,8 +1466,11 @@ fn mount_image_from_path(path_arg: &[u8], target_and_type: Option<(&str, Option<
                         } else {
                             // No fstype provided; attempt to auto-detect
                             if is_probably_fat32(data) {
-                                    if crate::fs::fat32::mount(data) {
-                                    let _ = crate::fs::vfs::mount(target_path, crate::fs::vfs::VfsBackend::Fat32);
+                                if crate::fs::fat32::mount(data) {
+                                    let _ = crate::fs::vfs::mount(
+                                        target_path,
+                                        crate::fs::vfs::VfsBackend::Fat32,
+                                    );
                                     crate::kernel::write_raw("Auto-detected FAT32 and mounted at ");
                                     crate::kernel::write_raw(target_path);
                                     crate::print!("\n");
@@ -1248,8 +1479,13 @@ fn mount_image_from_path(path_arg: &[u8], target_and_type: Option<(&str, Option<
                                 }
                             } else if is_probably_isofs(data) {
                                 if crate::fs::isofs::mount(data) {
-                                    let _ = crate::fs::vfs::mount(target_path, crate::fs::vfs::VfsBackend::Isofs);
-                                    crate::kernel::write_raw("Auto-detected CD-ROM/ISO9660 and mounted at ");
+                                    let _ = crate::fs::vfs::mount(
+                                        target_path,
+                                        crate::fs::vfs::VfsBackend::Isofs,
+                                    );
+                                    crate::kernel::write_raw(
+                                        "Auto-detected CD-ROM/ISO9660 and mounted at ",
+                                    );
                                     crate::kernel::write_raw(target_path);
                                     crate::print!("\n");
                                 } else {
@@ -1283,8 +1519,12 @@ fn mount_image_from_path(path_arg: &[u8], target_and_type: Option<(&str, Option<
 }
 
 fn is_probably_fat32(data: &[u8]) -> bool {
-    if data.len() < 512 { return false; }
-    if data[510] != 0x55 || data[511] != 0xAA { return false; }
+    if data.len() < 512 {
+        return false;
+    }
+    if data[510] != 0x55 || data[511] != 0xAA {
+        return false;
+    }
     let bps = (data[11] as u16) | ((data[12] as u16) << 8);
     let spc = data[13];
     let reserved = (data[14] as u16) | ((data[15] as u16) << 8);
@@ -1447,19 +1687,17 @@ fn cd_cmd(arg: &[u8]) {
     let mut buf = [0u8; 128];
 
     match make_absolute_path(arg, &mut buf) {
-        Some(path) => {
-            match crate::fs::vfs::parse_path(path) {
-                Ok(_) => {
-                    let normalized = ensure_no_trailing_slash_except_root(path);
-                    let _ = crate::fs::cwd::set(normalized);
-                }
-
-                Err(e) => {
-                    crate::kernel::write_raw(crate::fs::vfs::error_str(e));
-                    crate::print!("\n");
-                }
+        Some(path) => match crate::fs::vfs::parse_path(path) {
+            Ok(_) => {
+                let normalized = ensure_no_trailing_slash_except_root(path);
+                let _ = crate::fs::cwd::set(normalized);
             }
-        }
+
+            Err(e) => {
+                crate::kernel::write_raw(crate::fs::vfs::error_str(e));
+                crate::print!("\n");
+            }
+        },
 
         None => crate::print!("Invalid path\n"),
     }

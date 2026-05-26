@@ -25,9 +25,7 @@ impl Psf2 {
             return None;
         }
 
-        let header = unsafe {
-            core::ptr::read_unaligned(data.as_ptr() as *const Psf2Header)
-        };
+        let header = unsafe { core::ptr::read_unaligned(data.as_ptr() as *const Psf2Header) };
 
         if !Self::is_valid_header(&header) {
             return None;
@@ -51,7 +49,13 @@ impl Psf2 {
     }
 
     pub fn is_valid(&self) -> bool {
-        Self::is_valid_parts(self.header_size, self.glyph_count, self.char_size, self.height, self.width)
+        Self::is_valid_parts(
+            self.header_size,
+            self.glyph_count,
+            self.char_size,
+            self.height,
+            self.width,
+        )
     }
 
     pub fn glyphs(&self) -> &[u8] {

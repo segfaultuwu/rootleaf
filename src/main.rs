@@ -9,8 +9,8 @@ mod fs;
 mod kernel;
 mod lib;
 mod memory;
-mod shell;
 mod scheduler;
+mod shell;
 
 #[macro_use]
 mod macros;
@@ -35,7 +35,8 @@ static CONSOLE_STORAGE: ConsoleStorage = ConsoleStorage(UnsafeCell::new(MaybeUni
 
 #[unsafe(no_mangle)]
 pub extern "C" fn _start() -> ! {
-    drivers::serial::init();
+    // drivers::serial::init();
+    drivers::init();
     drivers::serial::write_str("Rootleaf: serial initialized\n");
 
     if !BASE_REVISION.is_supported() {
@@ -85,9 +86,8 @@ pub extern "C" fn _start() -> ! {
 
     let fb_size = framebuffer.pitch as usize * framebuffer.height as usize;
 
-    let fb_slice: &'static mut [u8] = unsafe {
-        core::slice::from_raw_parts_mut(framebuffer.address() as *mut u8, fb_size)
-    };
+    let fb_slice: &'static mut [u8] =
+        unsafe { core::slice::from_raw_parts_mut(framebuffer.address() as *mut u8, fb_size) };
 
     let fb_start = fb_slice.as_ptr() as usize;
     let fb_end = fb_start.saturating_add(fb_size);
@@ -194,13 +194,13 @@ fn allocate_back_buffer(
     let overlaps = bb_start < fb_end && fb_start < bb_end;
 
     if overlaps {
-        drivers::serial::write_str("Rootleaf: back buffer overlaps framebuffer, disabling double buffering\n");
+        drivers::serial::write_str(
+            "Rootleaf: back buffer overlaps framebuffer, disabling double buffering\n",
+        );
         return None;
     }
 
-    Some(unsafe {
-        core::slice::from_raw_parts_mut(start_addr as *mut u8, fb_size)
-    })
+    Some(unsafe { core::slice::from_raw_parts_mut(start_addr as *mut u8, fb_size) })
 }
 
 fn print_framebuffer_info(framebuffer: &limine::framebuffer::Framebuffer) {

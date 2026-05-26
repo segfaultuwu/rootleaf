@@ -203,12 +203,7 @@ impl Color {
     pub const ROOTLEAF_GREEN: Self = Self::rgb(0x55, 0xff, 0x55);
 
     pub const fn rgb(r: u8, g: u8, b: u8) -> Self {
-        Self {
-            r,
-            g,
-            b,
-            a: 0x00,
-        }
+        Self { r, g, b, a: 0x00 }
     }
 
     pub const fn rgba(r: u8, g: u8, b: u8, a: u8) -> Self {

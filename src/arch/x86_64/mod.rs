@@ -1,7 +1,7 @@
+pub mod cpu;
 pub mod idt;
 pub mod pic;
 pub mod port;
-pub mod cpu;
 
 pub fn init() {
     unsafe {

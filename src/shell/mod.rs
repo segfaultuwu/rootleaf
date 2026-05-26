@@ -1,9 +1,9 @@
+pub mod autorun;
 pub mod commands;
+pub mod editor;
 pub mod input;
 pub mod path;
 pub mod tabs;
-pub mod editor;
-pub mod autorun;
 
 use core::cell::UnsafeCell;
 

@@ -1,7 +1,7 @@
 use core::cell::UnsafeCell;
 
 use crate::boot::limine::MEMORY_MAP_REQUEST;
-use crate::memory::addr::{align_up, PAGE_SIZE};
+use crate::memory::addr::{PAGE_SIZE, align_up};
 
 struct FrameAllocatorSlot {
     inner: UnsafeCell<FrameAllocator>,
@@ -74,9 +74,7 @@ impl FrameAllocator {
             return None;
         }
 
-        let frame = Frame {
-            addr: self.current,
-        };
+        let frame = Frame { addr: self.current };
 
         self.current = next;
 
@@ -93,19 +91,13 @@ impl FrameAllocator {
 }
 
 pub fn init() -> bool {
-    unsafe {
-        (*FRAME_ALLOCATOR.inner.get()).init_from_memory_map()
-    }
+    unsafe { (*FRAME_ALLOCATOR.inner.get()).init_from_memory_map() }
 }
 
 pub fn alloc_frame() -> Option<Frame> {
-    unsafe {
-        (*FRAME_ALLOCATOR.inner.get()).alloc()
-    }
+    unsafe { (*FRAME_ALLOCATOR.inner.get()).alloc() }
 }
 
 pub fn remaining_frames() -> u64 {
-    unsafe {
-        (*FRAME_ALLOCATOR.inner.get()).remaining_frames()
-    }
+    unsafe { (*FRAME_ALLOCATOR.inner.get()).remaining_frames() }
 }

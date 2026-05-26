@@ -300,7 +300,11 @@ impl ConsoleDriver {
     }
 
     pub fn prompt(&mut self) {
-        self.write_colored(crate::fs::cwd::get(), ConsoleColor::LIGHT_GREEN, ConsoleColor::BLACK);
+        self.write_colored(
+            crate::fs::cwd::get(),
+            ConsoleColor::LIGHT_GREEN,
+            ConsoleColor::BLACK,
+        );
 
         self.write_colored(" % ", ConsoleColor::LIGHT_GREEN, ConsoleColor::BLACK);
 
@@ -567,7 +571,9 @@ impl ConsoleDriver {
             return;
         }
 
-        let move_len = end_offset.saturating_sub(start_offset).saturating_sub(row_bytes);
+        let move_len = end_offset
+            .saturating_sub(start_offset)
+            .saturating_sub(row_bytes);
 
         if move_len > 0 {
             fb.copy_within(start_offset + row_bytes..end_offset, start_offset);

@@ -399,9 +399,5 @@ fn scancode_to_ascii(scancode: u8, shift: bool, caps: bool) -> Option<u8> {
 }
 
 fn letter(ch: u8, shift: bool, caps: bool) -> u8 {
-    if shift ^ caps {
-        ch - 32
-    } else {
-        ch
-    }
+    if shift ^ caps { ch - 32 } else { ch }
 }

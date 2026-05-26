@@ -7,11 +7,7 @@ pub fn align_up(addr: u64, align: u64) -> u64 {
 
     let rem = addr % align;
 
-    if rem == 0 {
-        addr
-    } else {
-        addr + (align - rem)
-    }
+    if rem == 0 { addr } else { addr + (align - rem) }
 }
 
 pub fn align_down(addr: u64, align: u64) -> u64 {

@@ -284,9 +284,14 @@ pub fn launch(path: &str) {
 
                         lens[cursor_line] = cursor_col;
 
-                        if insert_empty_line(&mut lines, &mut lens, &mut line_count, cursor_line + 1)
-                        {
-                            lines[cursor_line + 1][..right_len].copy_from_slice(&right[..right_len]);
+                        if insert_empty_line(
+                            &mut lines,
+                            &mut lens,
+                            &mut line_count,
+                            cursor_line + 1,
+                        ) {
+                            lines[cursor_line + 1][..right_len]
+                                .copy_from_slice(&right[..right_len]);
                             lens[cursor_line + 1] = right_len;
                             cursor_line += 1;
                             cursor_col = 0;
@@ -425,7 +430,11 @@ pub fn launch(path: &str) {
                         pending_d = false;
                     } else {
                         pending_d = true;
-                        set_status(&mut status, &mut status_len, "d pressed: press d again for dd");
+                        set_status(
+                            &mut status,
+                            &mut status_len,
+                            "d pressed: press d again for dd",
+                        );
                     }
                 }
 
@@ -468,7 +477,11 @@ pub fn launch(path: &str) {
                         mode = Mode::Normal;
                     } else if cmd == b"q" {
                         if dirty {
-                            set_status(&mut status, &mut status_len, "no write since last change (:q! to force)");
+                            set_status(
+                                &mut status,
+                                &mut status_len,
+                                "no write since last change (:q! to force)",
+                            );
                             mode = Mode::Normal;
                         } else {
                             clear_screen_no_prompt();

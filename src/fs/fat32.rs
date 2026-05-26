@@ -6,7 +6,11 @@ static mut FILE_READ_BUFFER: [u8; FILE_READ_BUFFER_SIZE] = [0u8; FILE_READ_BUFFE
 #[derive(Clone, Copy)]
 enum MountedDisk {
     Memory(&'static [u8]),
-    Ata { sectors: u32, start_lba: u32 },
+    Ata {
+        disk_idx: usize,
+        sectors: u32,
+        start_lba: u32,
+    },
 }
 
 static mut MOUNTED: Option<MountedDisk> = None;
@@ -41,25 +45,18 @@ pub fn mount(data: &'static [u8]) -> bool {
     true
 }
 
-pub fn mount_first_ata() -> Result<(), &'static str> {
-    if is_mounted() {
-        return Ok(());
-    }
-
-    let sectors = match crate::drivers::ata::first_disk_sectors() {
+pub fn mount_ata(disk_idx: usize) -> Result<(), &'static str> {
+    let sectors = match crate::drivers::ata::disk_sectors(disk_idx) {
         Some(s) if s > 0 => s,
-        _ => return Err("No ATA disk found"),
+        _ => return Err("No ATA disk at that index"),
     };
 
-    // Try to detect an MBR partition table and mount first partition if present
     let mut start_lba: u32 = 0;
     let mut part_sectors: u32 = sectors;
 
     let mut sec0 = [0u8; 512];
-    if crate::drivers::ata::read_first_sector(0, &mut sec0).is_ok() {
-        // Check MBR signature 0x55AA at 510..511
+    if crate::drivers::ata::read_sector(disk_idx, 0, &mut sec0).is_ok() {
         if sec0[510] == 0x55 && sec0[511] == 0xAA {
-            // partition entry 1 at offset 446
             let p_off = 446;
             let p_start = (sec0[p_off + 8] as u32)
                 | ((sec0[p_off + 9] as u32) << 8)
@@ -69,7 +66,6 @@ pub fn mount_first_ata() -> Result<(), &'static str> {
                 | ((sec0[p_off + 13] as u32) << 8)
                 | ((sec0[p_off + 14] as u32) << 16)
                 | ((sec0[p_off + 15] as u32) << 24);
-
             if p_start != 0 && p_len != 0 {
                 start_lba = p_start;
                 part_sectors = p_len;
@@ -78,10 +74,18 @@ pub fn mount_first_ata() -> Result<(), &'static str> {
     }
 
     unsafe {
-        MOUNTED = Some(MountedDisk::Ata { sectors: part_sectors, start_lba });
+        MOUNTED = Some(MountedDisk::Ata {
+            disk_idx,
+            sectors: part_sectors,
+            start_lba,
+        });
     }
 
     Ok(())
+}
+
+pub fn mount_first_ata() -> Result<(), &'static str> {
+    mount_ata(0)
 }
 
 pub fn unmount() {
@@ -131,7 +135,11 @@ fn read_bytes(offset: usize, out: &mut [u8]) -> bool {
             out.copy_from_slice(&data[offset..offset + out.len()]);
             true
         }
-        Some(MountedDisk::Ata { sectors, start_lba }) => {
+        Some(MountedDisk::Ata {
+            disk_idx,
+            sectors,
+            start_lba,
+        }) => {
             let mut done = 0usize;
             while done < out.len() {
                 let abs = offset + done;
@@ -139,7 +147,7 @@ fn read_bytes(offset: usize, out: &mut [u8]) -> bool {
                 let sector_off = abs % 512;
 
                 let mut sector = [0u8; 512];
-                if crate::drivers::ata::read_first_sector(lba, &mut sector).is_err() {
+                if crate::drivers::ata::read_sector(disk_idx, lba, &mut sector).is_err() {
                     return false;
                 }
 
@@ -322,8 +330,12 @@ pub fn read_file(path: &str) -> Result<&'static [u8], VfsError> {
             }
 
             let first = entry[0];
-            if first == 0x00 { break; }
-            if first == 0xE5 || entry[11] == 0x0F { continue; }
+            if first == 0x00 {
+                break;
+            }
+            if first == 0xE5 || entry[11] == 0x0F {
+                continue;
+            }
 
             // short name
             let name_raw = &entry[0..11];
@@ -331,14 +343,21 @@ pub fn read_file(path: &str) -> Result<&'static [u8], VfsError> {
             let mut ni = 0usize;
 
             for &b in &name_raw[0..8] {
-                if b == b' ' { break; }
-                name_str[ni] = b; ni += 1;
+                if b == b' ' {
+                    break;
+                }
+                name_str[ni] = b;
+                ni += 1;
             }
             if name_raw[8] != b' ' {
-                name_str[ni] = b'.'; ni += 1;
+                name_str[ni] = b'.';
+                ni += 1;
                 for &b in &name_raw[8..11] {
-                    if b == b' ' { break; }
-                    name_str[ni] = b; ni += 1;
+                    if b == b' ' {
+                        break;
+                    }
+                    name_str[ni] = b;
+                    ni += 1;
                 }
             }
 
@@ -361,17 +380,24 @@ pub fn read_file(path: &str) -> Result<&'static [u8], VfsError> {
             }
         }
 
-        if found_start.is_some() { break; }
+        if found_start.is_some() {
+            break;
+        }
 
         let next = match read_fat_next(meta, cluster) {
             Some(v) => v,
             None => break,
         };
-        if next >= 0x0FFFFFF8 || next == 0 { break; }
+        if next >= 0x0FFFFFF8 || next == 0 {
+            break;
+        }
         cluster = next;
     }
 
-    let start = match found_start { Some(s) => s, None => return Err(VfsError::NotFound) };
+    let start = match found_start {
+        Some(s) => s,
+        None => return Err(VfsError::NotFound),
+    };
 
     if found_size > FILE_READ_BUFFER_SIZE {
         crate::drivers::serial::write_str("[fat32] file too large for buffer\n");
@@ -385,7 +411,9 @@ pub fn read_file(path: &str) -> Result<&'static [u8], VfsError> {
     let mut cur = start;
 
     loop {
-        if out_written >= found_size { break; }
+        if out_written >= found_size {
+            break;
+        }
 
         let off = cluster_to_offset(meta, cur);
 
@@ -407,7 +435,9 @@ pub fn read_file(path: &str) -> Result<&'static [u8], VfsError> {
             Some(v) => v,
             None => break,
         };
-        if next >= 0x0FFFFFF8 || next == 0 { break; }
+        if next >= 0x0FFFFFF8 || next == 0 {
+            break;
+        }
         cur = next;
     }
 
