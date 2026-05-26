@@ -20,31 +20,18 @@ use core::mem::MaybeUninit;
 
 use crate::boot::limine::{BASE_REVISION, FRAMEBUFFER_REQUEST};
 use crate::drivers::graphics::{ConsoleDriver, Psf2};
-use crate::memory::alloc_frame;
-use crate::memory::addr::PAGE_SIZE;
 use crate::kernel::{hlt_loop, init_console};
 use crate::lib::u32_to_str;
+use crate::memory::addr::PAGE_SIZE;
+use crate::memory::alloc_frame;
 
 static PSF_FONT: &[u8] = include_bytes!("../assets/ter-u16n.psf");
-
-// current working directory managed via fs::cwd
 
 struct ConsoleStorage(UnsafeCell<MaybeUninit<ConsoleDriver>>);
 
 unsafe impl Sync for ConsoleStorage {}
 
 static CONSOLE_STORAGE: ConsoleStorage = ConsoleStorage(UnsafeCell::new(MaybeUninit::uninit()));
-
-extern "C" fn test_task(arg: usize) -> ! {
-    loop {
-        crate::drivers::serial::write_str("[task] alive\n");
-        for _ in 0..10_000_000 {
-            core::hint::spin_loop();
-        }
-
-        crate::scheduler::yield_now();
-    }
-}
 
 #[unsafe(no_mangle)]
 pub extern "C" fn _start() -> ! {
@@ -56,6 +43,10 @@ pub extern "C" fn _start() -> ! {
         hlt_loop();
     }
 
+    memory::init();
+
+    crate::fs::cwd::init("/");
+
     let font = match Psf2::new(PSF_FONT) {
         Some(font) => font,
         None => {
@@ -63,11 +54,6 @@ pub extern "C" fn _start() -> ! {
             hlt_loop();
         }
     };
-
-    memory::init();
-
-    // initialize current working directory
-    crate::fs::cwd::init("0:\\");
 
     drivers::serial::write_str("Rootleaf: PSF font loaded, glyphs: ");
 
@@ -99,45 +85,14 @@ pub extern "C" fn _start() -> ! {
 
     let fb_size = framebuffer.pitch as usize * framebuffer.height as usize;
 
-    let fb_slice: &'static mut [u8] =
-        unsafe { core::slice::from_raw_parts_mut(framebuffer.address() as *mut u8, fb_size) };
-
-    // Try to allocate a contiguous back buffer of the same size (double buffering).
-    let back_buffer: Option<&'static mut [u8]> = {
-        let pages = (fb_size + PAGE_SIZE as usize - 1) / PAGE_SIZE as usize;
-        let mut start_addr: u64 = 0;
-        let mut ok = true;
-
-        for i in 0..pages {
-            match alloc_frame() {
-                Some(f) => {
-                    if i == 0 {
-                        start_addr = f.addr;
-                    }
-                }
-                None => {
-                    ok = false;
-                    break;
-                }
-            }
-        }
-
-        if ok {
-            let bb_start = start_addr as usize;
-            let bb_end = bb_start.saturating_add(fb_size);
-            let fb_start = fb_slice.as_ptr() as usize;
-            let fb_end = fb_start.saturating_add(fb_size);
-            let overlaps = bb_start < fb_end && fb_start < bb_end;
-
-            if overlaps {
-                None
-            } else {
-                Some(unsafe { core::slice::from_raw_parts_mut(start_addr as *mut u8, fb_size) })
-            }
-        } else {
-            None
-        }
+    let fb_slice: &'static mut [u8] = unsafe {
+        core::slice::from_raw_parts_mut(framebuffer.address() as *mut u8, fb_size)
     };
+
+    let fb_start = fb_slice.as_ptr() as usize;
+    let fb_end = fb_start.saturating_add(fb_size);
+
+    let back_buffer = allocate_back_buffer(fb_size, fb_start, fb_end);
 
     let console: &'static mut ConsoleDriver = unsafe {
         (*CONSOLE_STORAGE.0.get()).write(ConsoleDriver::new(
@@ -159,25 +114,101 @@ pub extern "C" fn _start() -> ! {
     arch::x86_64::init();
     drivers::keyboard::init();
 
-    crate::scheduler::init();
+    /*
+        Mount disk before starting shell task.
 
-    
-    if crate::fs::fat32::mount_first_ata().is_ok() {
-        drivers::serial::write_str("Rootleaf: auto-mounted \\\\DISK1 as 1:\\\n");
+        Important:
+        Do not call scheduler::init() before this and then again after this.
+        scheduler::init() must be called exactly once.
+    */
+    match crate::fs::fat32::mount_first_ata() {
+        Ok(()) => {
+            drivers::serial::write_str("Rootleaf: auto-mounted \\\\DISK1 as 1:\\\n");
+        }
+
+        Err(message) => {
+            drivers::serial::write_str("Rootleaf: auto-mount failed: ");
+            drivers::serial::write_str(message);
+            drivers::serial::write_str("\n");
+        }
     }
-    
+
+    drivers::serial::write_str("Rootleaf: FAT32 mounted state = ");
+    if crate::fs::fat32::is_mounted() {
+        drivers::serial::write_str("true\n");
+    } else {
+        drivers::serial::write_str("false\n");
+    }
+
+    /*
+        Scheduler init ONCE.
+    */
     crate::scheduler::init();
 
     crate::scheduler::spawn(crate::shell::shell_task as usize, 0)
         .expect("failed to spawn shell task");
 
+    /*
+        Idle task / task 0.
+        Keyboard polling and rendering stay here.
+        Shell itself runs as task 1.
+    */
     loop {
+        crate::drivers::keyboard::poll_once();
+        crate::kernel::tick_cursor();
+        crate::kernel::present();
+
         crate::scheduler::yield_now();
 
         unsafe {
             core::arch::asm!("pause", options(nomem, nostack));
         }
     }
+}
+
+fn allocate_back_buffer(
+    fb_size: usize,
+    fb_start: usize,
+    fb_end: usize,
+) -> Option<&'static mut [u8]> {
+    let pages = (fb_size + PAGE_SIZE as usize - 1) / PAGE_SIZE as usize;
+
+    let mut start_addr: u64 = 0;
+    let mut ok = true;
+
+    for i in 0..pages {
+        match alloc_frame() {
+            Some(frame) => {
+                if i == 0 {
+                    start_addr = frame.addr;
+                }
+            }
+
+            None => {
+                ok = false;
+                break;
+            }
+        }
+    }
+
+    if !ok {
+        drivers::serial::write_str("Rootleaf: failed to allocate framebuffer back buffer\n");
+        return None;
+    }
+
+    let bb_start = start_addr as usize;
+    let bb_end = bb_start.saturating_add(fb_size);
+
+    let overlaps = bb_start < fb_end && fb_start < bb_end;
+
+    if overlaps {
+        drivers::serial::write_str("Rootleaf: back buffer overlaps framebuffer, disabling double buffering\n");
+        return None;
+    }
+
+    Some(unsafe {
+        core::slice::from_raw_parts_mut(start_addr as *mut u8, fb_size)
+    })
 }
 
 fn print_framebuffer_info(framebuffer: &limine::framebuffer::Framebuffer) {

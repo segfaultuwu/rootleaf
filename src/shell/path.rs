@@ -1,16 +1,13 @@
-pub fn trim_ascii(bytes: &[u8]) -> &[u8] {
-    let mut start = 0;
-    let mut end = bytes.len();
-
-    while start < end && bytes[start].is_ascii_whitespace() {
-        start += 1;
+pub fn trim_ascii(mut input: &[u8]) -> &[u8] {
+    while !input.is_empty() && input[0].is_ascii_whitespace() {
+        input = &input[1..];
     }
 
-    while end > start && bytes[end - 1].is_ascii_whitespace() {
-        end -= 1;
+    while !input.is_empty() && input[input.len() - 1].is_ascii_whitespace() {
+        input = &input[..input.len() - 1];
     }
 
-    &bytes[start..end]
+    input
 }
 
 pub fn clear_line_buffer(line: &mut [u8; 128]) {
@@ -49,56 +46,135 @@ pub fn to_ascii_upper(byte: u8) -> u8 {
     }
 }
 
-pub fn make_absolute_path<'a>(input: &'a [u8], buffer: &'a mut [u8; 128]) -> Option<&'a str> {
+pub fn make_absolute_path<'a>(input: &[u8], buffer: &'a mut [u8; 128]) -> Option<&'a str> {
     let input = trim_ascii(input);
 
     if input.is_empty() {
         return None;
     }
 
-    if looks_absolute_path(input) {
-        return core::str::from_utf8(input).ok();
-    }
+    let input_str = core::str::from_utf8(input).ok()?;
 
-    let prefix = crate::fs::cwd::get().as_bytes();
+    if is_legacy_disk_path(input_str) {
+        return legacy_to_linux_path(input_str, buffer);
+    }
 
     let mut len = 0usize;
 
-    for &b in prefix {
-        if len >= buffer.len() {
-            return None;
+    if input_str.starts_with('/') {
+        copy_bytes(input_str.as_bytes(), buffer, &mut len)?;
+    } else {
+        let cwd = crate::fs::cwd::get();
+
+        copy_bytes(cwd.as_bytes(), buffer, &mut len)?;
+
+        if len == 0 || buffer[len - 1] != b'/' {
+            push_byte(buffer, &mut len, b'/')?;
         }
 
-        buffer[len] = b;
-        len += 1;
+        copy_bytes(input_str.as_bytes(), buffer, &mut len)?;
     }
 
-    for &b in input {
-        if len >= buffer.len() {
-            return None;
-        }
+    normalize_slashes_in_place(buffer, &mut len);
 
-        buffer[len] = b;
-        len += 1;
+    while len > 1 && buffer[len - 1] == b'/' {
+        len -= 1;
     }
 
     core::str::from_utf8(&buffer[..len]).ok()
 }
 
-pub fn looks_absolute_path(input: &[u8]) -> bool {
-    let mut i = 0usize;
+fn is_legacy_disk_path(path: &str) -> bool {
+    let bytes = path.as_bytes();
 
-    while i < input.len() {
-        if input[i] == b':' {
-            return i + 1 < input.len() && input[i + 1] == b'\\';
-        }
+    bytes.len() >= 2 && bytes[1] == b':'
+}
 
-        if input[i] < b'0' || input[i] > b'9' {
-            return false;
-        }
+fn legacy_to_linux_path<'a>(path: &str, buffer: &'a mut [u8; 128]) -> Option<&'a str> {
+    let bytes = path.as_bytes();
 
-        i += 1;
+    if bytes.len() < 2 || bytes[1] != b':' {
+        return None;
     }
 
-    false
+    let mut len = 0usize;
+
+    match bytes[0] {
+        b'0' => copy_bytes(b"/ram", buffer, &mut len)?,
+        b'1' => copy_bytes(b"/disk1", buffer, &mut len)?,
+        _ => return None,
+    }
+
+    if bytes.len() > 2 {
+        let mut rest = &path[2..];
+
+        while rest.starts_with('\\') || rest.starts_with('/') {
+            rest = &rest[1..];
+        }
+
+        if !rest.is_empty() {
+            push_byte(buffer, &mut len, b'/')?;
+            copy_bytes(rest.as_bytes(), buffer, &mut len)?;
+        }
+    }
+
+    normalize_slashes_in_place(buffer, &mut len);
+
+    while len > 1 && buffer[len - 1] == b'/' {
+        len -= 1;
+    }
+
+    core::str::from_utf8(&buffer[..len]).ok()
+}
+
+fn copy_bytes(bytes: &[u8], buffer: &mut [u8; 128], len: &mut usize) -> Option<()> {
+    for &b in bytes {
+        push_byte(buffer, len, b)?;
+    }
+
+    Some(())
+}
+
+fn push_byte(buffer: &mut [u8; 128], len: &mut usize, byte: u8) -> Option<()> {
+    if *len >= buffer.len() {
+        return None;
+    }
+
+    buffer[*len] = byte;
+    *len += 1;
+
+    Some(())
+}
+
+fn normalize_slashes_in_place(buffer: &mut [u8; 128], len: &mut usize) {
+    for i in 0..*len {
+        if buffer[i] == b'\\' {
+            buffer[i] = b'/';
+        }
+    }
+
+    let mut read = 0usize;
+    let mut write = 0usize;
+    let mut last_was_slash = false;
+
+    while read < *len {
+        let b = buffer[read];
+
+        if b == b'/' {
+            if !last_was_slash {
+                buffer[write] = b;
+                write += 1;
+            }
+
+            last_was_slash = true;
+        } else {
+            buffer[write] = b;
+            write += 1;
+            last_was_slash = false;
+        }
+
+        read += 1;
+    }
+
+    *len = write;
 }

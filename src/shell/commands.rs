@@ -1,3 +1,4 @@
+use crate::fs::vfs::VfsBackend;
 use crate::shell::path::{
     eq_ignore_ascii_case, make_absolute_path, starts_with_ignore_ascii_case, trim_ascii,
 };
@@ -49,12 +50,27 @@ pub fn execute_command(command: &[u8]) {
         return;
     }
 
+    if starts_with_ignore_ascii_case(command, b"CAT ") {
+        type_file(&command[4..]);
+        return;
+    }
+
+    if starts_with_ignore_ascii_case(command, b"HD ") {
+        hexdump_file(&command[3..]);
+        return;
+    }
+
+    if starts_with_ignore_ascii_case(command, b"HEXDUMP ") {
+        hexdump_file(&command[8..]);
+        return;
+    }
+
     if starts_with_ignore_ascii_case(command, b"MOUNT ") {
         mount_cmd(&command[6..]);
         return;
     }
 
-    if eq_ignore_ascii_case(command, b"UMOUNT") {
+    if eq_ignore_ascii_case(command, b"UMOUNT") || eq_ignore_ascii_case(command, b"UNMOUNT") {
         umount_cmd();
         return;
     }
@@ -64,12 +80,22 @@ pub fn execute_command(command: &[u8]) {
         return;
     }
 
+    if eq_ignore_ascii_case(command, b"MOUNTS") {
+        mounts();
+        return;
+    }
+
     if eq_ignore_ascii_case(command, b"LSDEV") {
         lsdev();
         return;
     }
 
-    if eq_ignore_ascii_case(command, b"VER") {
+    if eq_ignore_ascii_case(command, b"TASKS") {
+        tasks();
+        return;
+    }
+
+    if eq_ignore_ascii_case(command, b"VER") || eq_ignore_ascii_case(command, b"VERSION") {
         crate::kernel::write_raw("Rootleaf Kernel [Version ");
         crate::kernel::write_raw(env!("CARGO_PKG_VERSION"));
         crate::print!("]\n");
@@ -109,6 +135,16 @@ pub fn execute_command(command: &[u8]) {
         return;
     }
 
+    if starts_with_ignore_ascii_case(command, b"TOUCH ") {
+        touch_cmd(&command[6..]);
+        return;
+    }
+
+    if starts_with_ignore_ascii_case(command, b"WRITE ") {
+        write_cmd(&command[6..]);
+        return;
+    }
+
     if starts_with_ignore_ascii_case(command, b"EDIT ") {
         edit_cmd(&command[5..]);
         return;
@@ -124,8 +160,23 @@ pub fn execute_command(command: &[u8]) {
         return;
     }
 
+    if starts_with_ignore_ascii_case(command, b"EXEC ") {
+        elf_cmd(&command[5..]);
+        return;
+    }
+
+    if starts_with_ignore_ascii_case(command, b"RM ") {
+        rm_cmd(&command[3..]);
+        return;
+    }
+
     if starts_with_ignore_ascii_case(command, b"RMD ") {
-        rmd_cmd(&command[4..]);
+        rm_cmd(&command[4..]);
+        return;
+    }
+
+    if starts_with_ignore_ascii_case(command, b"DEL ") {
+        rm_cmd(&command[4..]);
         return;
     }
 
@@ -134,29 +185,48 @@ pub fn execute_command(command: &[u8]) {
 
 fn help() {
     crate::print!("Available commands:\n");
-    crate::print!("  HELP              Show this help\n");
-    crate::print!("  VER               Show system version\n");
-    crate::print!("  CLS               Clear screen\n");
-    crate::print!("  CLEAR             Clear screen\n");
-    crate::print!("  ECHO <TEXT>       Print text\n");
-    crate::print!("  ABOUT             About Rootleaf\n");
-    crate::print!("  PWD               Print current working directory\n");
-    crate::print!("  MEM               Print memory info\n");
-    crate::print!("  SYSINFO           Print OS info\n");
-    crate::print!("  MMAP              Show Limine memory map\n");
-    crate::print!("  LSDEV             List detected devices\n");
-    crate::print!("  DIR               List current directory\n");
-    crate::print!("  DIR <PATH>        List directory\n");
-    crate::print!("  LS                List current directory\n");
-    crate::print!("  LS <PATH>         List directory\n");
-    crate::print!("  TYPE <FILE>       Show the contents of a file\n");
-    crate::print!("  MOUNT <SRC> [DST] Mount FAT32 image or physical disk\n");
-    crate::print!("  UMOUNT            Unmount disk\n");
-    crate::print!("  REBOOT            Restart machine\n");
-    crate::print!("  EDIT <PATH>       Launch in-kernel editor for RAMFS files\n");
-    crate::print!("  RUN <PATH>        Execute file as script\n");
-    crate::print!("  ELF <PATH>        Load and run ELF64 binary\n");
-    crate::print!("  RMD <PATH>        Delete RAMFS file\n");
+    crate::print!("  HELP                 Show this help\n");
+    crate::print!("  VER, VERSION         Show system version\n");
+    crate::print!("  ABOUT                About Rootleaf\n");
+    crate::print!("  CLS, CLEAR           Clear screen\n");
+    crate::print!("  ECHO <TEXT>          Print text\n");
+    crate::print!("  PWD                  Print current working directory\n");
+    crate::print!("  CD <PATH>            Change directory\n");
+    crate::print!("  CD ..                Go to parent directory\n");
+    crate::print!("  LS, DIR              List current directory\n");
+    crate::print!("  LS <PATH>            List directory\n");
+    crate::print!("  DIR <PATH>           List directory\n");
+    crate::print!("  TYPE <FILE>          Show text file\n");
+    crate::print!("  CAT <FILE>           Show text file\n");
+    crate::print!("  HD <FILE>            Hexdump file\n");
+    crate::print!("  HEXDUMP <FILE>       Hexdump file\n");
+    crate::print!("  TOUCH <FILE>         Create empty RAMFS file\n");
+    crate::print!("  WRITE <FILE> <TEXT>  Write text to RAMFS file\n");
+    crate::print!("  RM <FILE>            Delete RAMFS file\n");
+    crate::print!("  DEL <FILE>           Delete RAMFS file\n");
+    crate::print!("  EDIT <FILE>          Launch editor for RAMFS file\n");
+    crate::print!("  RUN <FILE>           Execute shell script\n");
+    crate::print!("  ELF <FILE>           Load and run ELF64 binary\n");
+    crate::print!("  EXEC <FILE>          Alias for ELF\n");
+    crate::print!("  MOUNT <SRC> [DST]    Mount FAT32 image or physical disk\n");
+    crate::print!("  UMOUNT               Unmount /disk1\n");
+    crate::print!("  DISKINFO             Show disk information\n");
+    crate::print!("  MOUNTS               Show mounted filesystems\n");
+    crate::print!("  LSDEV                List detected devices\n");
+    crate::print!("  TASKS                Show task count\n");
+    crate::print!("  MEM                  Print memory information\n");
+    crate::print!("  SYSINFO              Print OS information\n");
+    crate::print!("  MMAP                 Show Limine memory map\n");
+    crate::print!("  REBOOT               Restart machine\n");
+    crate::print!("\nLinux-style paths:\n");
+    crate::print!("  /                    Virtual root\n");
+    crate::print!("  /ram                 RAMFS\n");
+    crate::print!("  /disk1               FAT32 disk\n");
+    crate::print!("Examples:\n");
+    crate::print!("  LS /\n");
+    crate::print!("  LS /disk1\n");
+    crate::print!("  TYPE /disk1/README.TXT\n");
+    crate::print!("  ELF /disk1/APP.ELF\n");
 }
 
 fn sysinfo() {
@@ -178,6 +248,17 @@ fn sysinfo() {
     crate::kernel::write_raw("RAM:         ");
     crate::kernel::write_raw(crate::lib::u64_to_str(mem.usable_mib(), &mut buf));
     crate::print!(" MiB usable\n");
+
+    crate::kernel::write_raw("CWD:         ");
+    crate::kernel::write_raw(crate::fs::cwd::get());
+    crate::print!("\n");
+
+    crate::kernel::write_raw("Disk1:       ");
+    if crate::fs::fat32::is_mounted() {
+        crate::kernel::write_raw("mounted at /disk1\n");
+    } else {
+        crate::kernel::write_raw("not mounted\n");
+    }
 }
 
 fn mem() {
@@ -249,30 +330,47 @@ fn dir_path(arg: &[u8]) {
 }
 
 fn dir_resolved(path: &str) {
-    serial_log_path("[cmd] DIR path", path);
+    serial_log_path("[cmd] LS path", path);
 
     match crate::fs::vfs::parse_path(path) {
         Ok(parsed) => {
-            crate::kernel::write_raw(" Directory of ");
+            crate::kernel::write_raw("Directory of ");
             crate::kernel::write_raw(path);
             crate::print!("\n\n");
 
-            match parsed.disk {
-                0 => crate::fs::ramfs::print_dir(),
+            match parsed.backend {
+                VfsBackend::Root => {
+                    crate::print!("ram/\n");
+                    crate::print!("disk1/\n");
+                    crate::print!("dev/\n");
+                    crate::print!("proc/\n");
+                }
 
-                1 => {
-                    crate::drivers::serial::write_str("[cmd] DIR FAT32 begin\n");
-                    let result = crate::fs::fat32::print_dir(parsed.path);
-                    crate::drivers::serial::write_str("[cmd] DIR FAT32 end\n");
+                VfsBackend::Ramfs => {
+                    crate::fs::ramfs::print_dir();
+                }
+
+                VfsBackend::Fat32 => {
+                    if !crate::fs::fat32::is_mounted() {
+                        crate::kernel::write_raw("disk1 is not mounted\n");
+                        after_vfs_op();
+                        return;
+                    }
+
+                    let relative = crate::fs::vfs::normalize_path(parsed.path);
+
+                    let result = if relative.is_empty() {
+                        crate::fs::fat32::print_dir("")
+                            .or_else(|_| crate::fs::fat32::print_dir("\\"))
+                            .or_else(|_| crate::fs::fat32::print_dir("1:\\"))
+                    } else {
+                        crate::fs::fat32::print_dir(relative)
+                    };
 
                     if let Err(error) = result {
                         crate::kernel::write_raw(crate::fs::vfs::error_str(error));
                         crate::print!("\n");
                     }
-                }
-
-                _ => {
-                    crate::kernel::write_raw("Unsupported disk\n");
                 }
             }
         }
@@ -292,21 +390,15 @@ fn type_file(arg: &[u8]) {
 
     match make_absolute_path(arg, &mut path_buf) {
         Some(path) => {
-            serial_log_path("[cmd] TYPE path", path);
+            serial_log_path("[cmd] CAT path", path);
 
             if is_directory_path(path) {
-                crate::print!("Cannot TYPE a directory\n");
+                crate::print!("Cannot read a directory\n");
                 return;
             }
 
-            crate::drivers::serial::write_str("[cmd] TYPE vfs::read begin\n");
-
             match crate::fs::vfs::read(path) {
                 Ok(data) => {
-                    crate::drivers::serial::write_str("[cmd] TYPE vfs::read ok, size ");
-                    crate::drivers::serial::write_hex(data.len());
-                    crate::drivers::serial::write_str("\n");
-
                     if let Ok(text) = core::str::from_utf8(data) {
                         crate::kernel::write_raw(text);
 
@@ -314,26 +406,84 @@ fn type_file(arg: &[u8]) {
                             crate::print!("\n");
                         }
                     } else {
-                        crate::print!("Cannot display binary file\n");
+                        crate::print!("Cannot display binary file. Use HEXDUMP instead.\n");
                     }
                 }
 
                 Err(error) => {
-                    crate::drivers::serial::write_str("[cmd] TYPE vfs::read error: ");
-                    crate::drivers::serial::write_str(crate::fs::vfs::error_str(error));
-                    crate::drivers::serial::write_str("\n");
-
                     crate::kernel::write_raw(crate::fs::vfs::error_str(error));
                     crate::print!("\n");
                 }
             }
 
-            crate::drivers::serial::write_str("[cmd] TYPE vfs::read end\n");
             after_vfs_op();
         }
 
-        None => {
-            crate::print!("Invalid path\n");
+        None => crate::print!("Invalid path\n"),
+    }
+}
+
+fn hexdump_file(arg: &[u8]) {
+    let arg = trim_ascii(arg);
+    let mut path_buf = [0u8; 128];
+
+    match make_absolute_path(arg, &mut path_buf) {
+        Some(path) => {
+            serial_log_path("[cmd] HEXDUMP path", path);
+
+            match crate::fs::vfs::read(path) {
+                Ok(data) => hexdump(data),
+
+                Err(error) => {
+                    crate::kernel::write_raw(crate::fs::vfs::error_str(error));
+                    crate::print!("\n");
+                }
+            }
+
+            after_vfs_op();
+        }
+
+        None => crate::print!("Invalid path\n"),
+    }
+}
+
+fn hexdump(data: &[u8]) {
+    let mut offset = 0usize;
+
+    while offset < data.len() {
+        print_hex_usize(offset);
+        crate::kernel::write_raw(": ");
+
+        for i in 0..16 {
+            if offset + i < data.len() {
+                print_hex_byte(data[offset + i]);
+                crate::kernel::write_byte(b' ');
+            } else {
+                crate::kernel::write_raw("   ");
+            }
+        }
+
+        crate::kernel::write_raw(" |");
+
+        for i in 0..16 {
+            if offset + i < data.len() {
+                let b = data[offset + i];
+
+                if b.is_ascii_graphic() || b == b' ' {
+                    crate::kernel::write_byte(b);
+                } else {
+                    crate::kernel::write_byte(b'.');
+                }
+            }
+        }
+
+        crate::kernel::write_raw("|\n");
+
+        offset += 16;
+
+        if offset >= 256 {
+            crate::kernel::write_raw("[hexdump truncated to 256 bytes]\n");
+            break;
         }
     }
 }
@@ -346,6 +496,70 @@ fn echo(text: &[u8]) {
     crate::print!("\n");
 }
 
+fn touch_cmd(arg: &[u8]) {
+    let arg = trim_ascii(arg);
+
+    if arg.is_empty() {
+        crate::print!("Usage: TOUCH <PATH>\n");
+        return;
+    }
+
+    let mut path_buf = [0u8; 128];
+
+    match make_absolute_path(arg, &mut path_buf) {
+        Some(path) => {
+            if is_fat32_path(path) {
+                crate::print!("TOUCH on /disk1 is disabled for now\n");
+                return;
+            }
+
+            match crate::fs::vfs::write(path, b"") {
+                Ok(()) => crate::print!("Created\n"),
+                Err(e) => {
+                    crate::kernel::write_raw(crate::fs::vfs::error_str(e));
+                    crate::print!("\n");
+                }
+            }
+
+            after_vfs_op();
+        }
+
+        None => crate::print!("Invalid path\n"),
+    }
+}
+
+fn write_cmd(arg: &[u8]) {
+    let arg = trim_ascii(arg);
+
+    let Some((path_arg, text)) = split_first_word(arg) else {
+        crate::print!("Usage: WRITE <PATH> <TEXT>\n");
+        return;
+    };
+
+    let mut path_buf = [0u8; 128];
+
+    match make_absolute_path(path_arg, &mut path_buf) {
+        Some(path) => {
+            if is_fat32_path(path) {
+                crate::print!("WRITE on /disk1 is disabled for now\n");
+                return;
+            }
+
+            match crate::fs::vfs::write(path, text) {
+                Ok(()) => crate::print!("Written\n"),
+                Err(e) => {
+                    crate::kernel::write_raw(crate::fs::vfs::error_str(e));
+                    crate::print!("\n");
+                }
+            }
+
+            after_vfs_op();
+        }
+
+        None => crate::print!("Invalid path\n"),
+    }
+}
+
 fn edit_cmd(arg: &[u8]) {
     let arg = trim_ascii(arg);
     let mut path_buf = [0u8; 128];
@@ -354,23 +568,20 @@ fn edit_cmd(arg: &[u8]) {
         Some(path) => {
             serial_log_path("[cmd] EDIT path", path);
 
-            if is_disk1_path(path) {
-                crate::print!("EDIT on disk 1 is disabled for now\n");
+            if is_fat32_path(path) {
+                crate::print!("EDIT on /disk1 is disabled for now\n");
                 crate::print!("Reason: FAT32/VFS write path is not stable yet\n");
-                crate::drivers::serial::write_str("[cmd] EDIT blocked on disk 1\n");
                 return;
             }
 
             crate::shell::editor::launch(path);
         }
 
-        None => {
-            crate::print!("Invalid path\n");
-        }
+        None => crate::print!("Invalid path\n"),
     }
 }
 
-fn run_script(arg: &[u8]) {
+pub fn run_script(arg: &[u8]) {
     let arg = trim_ascii(arg);
     let mut path_buf = [0u8; 128];
 
@@ -383,14 +594,8 @@ fn run_script(arg: &[u8]) {
                 return;
             }
 
-            crate::drivers::serial::write_str("[cmd] RUN vfs::read begin\n");
-
             match crate::fs::vfs::read(path) {
                 Ok(data) => {
-                    crate::drivers::serial::write_str("[cmd] RUN vfs::read ok, size ");
-                    crate::drivers::serial::write_hex(data.len());
-                    crate::drivers::serial::write_str("\n");
-
                     if let Ok(text) = core::str::from_utf8(data) {
                         for line in text.lines() {
                             let bytes = trim_ascii(line.as_bytes());
@@ -408,16 +613,11 @@ fn run_script(arg: &[u8]) {
                 }
 
                 Err(e) => {
-                    crate::drivers::serial::write_str("[cmd] RUN vfs::read error: ");
-                    crate::drivers::serial::write_str(crate::fs::vfs::error_str(e));
-                    crate::drivers::serial::write_str("\n");
-
                     crate::kernel::write_raw(crate::fs::vfs::error_str(e));
                     crate::print!("\n");
                 }
             }
 
-            crate::drivers::serial::write_str("[cmd] RUN vfs::read end\n");
             after_vfs_op();
         }
 
@@ -426,8 +626,6 @@ fn run_script(arg: &[u8]) {
 }
 
 fn elf_cmd(arg: &[u8]) {
-    crate::drivers::serial::write_str("ELF: command received\n");
-
     let arg = trim_ascii(arg);
 
     crate::drivers::serial::write_str("ELF: raw arg = '");
@@ -447,29 +645,27 @@ fn elf_cmd(arg: &[u8]) {
                 return;
             }
 
-            crate::drivers::serial::write_str("ELF: vfs::read begin\n");
+            crate::drivers::serial::write_str("ELF: before vfs::read path='");
+            crate::drivers::serial::write_str(path);
+            crate::drivers::serial::write_str("'\n");
 
             match crate::fs::vfs::read(path) {
                 Ok(data) => {
-                    crate::drivers::serial::write_str("ELF: file read ok, size ");
+                    crate::drivers::serial::write_str("ELF: vfs::read ok, size=");
                     crate::drivers::serial::write_hex(data.len());
                     crate::drivers::serial::write_str("\n");
 
                     match crate::kernel::elf64::run(data) {
                         Ok(code) => {
-                            crate::drivers::serial::write_str("ELF: run returned ok\n");
-
                             crate::kernel::write_raw("ELF exited with code ");
+
                             let mut buf = [0u8; 20];
                             crate::kernel::write_raw(crate::lib::u64_to_str(code as u64, &mut buf));
+
                             crate::print!("\n");
                         }
 
                         Err(msg) => {
-                            crate::drivers::serial::write_str("ELF: run returned error: ");
-                            crate::drivers::serial::write_str(msg);
-                            crate::drivers::serial::write_str("\n");
-
                             crate::kernel::write_raw("ELF error: ");
                             crate::kernel::write_raw(msg);
                             crate::print!("\n");
@@ -478,9 +674,7 @@ fn elf_cmd(arg: &[u8]) {
                 }
 
                 Err(e) => {
-                    crate::drivers::serial::write_str("ELF: vfs read failed for path '");
-                    crate::drivers::serial::write_str(path);
-                    crate::drivers::serial::write_str("': ");
+                    crate::drivers::serial::write_str("ELF: vfs::read failed: ");
                     crate::drivers::serial::write_str(crate::fs::vfs::error_str(e));
                     crate::drivers::serial::write_str("\n");
 
@@ -489,48 +683,38 @@ fn elf_cmd(arg: &[u8]) {
                 }
             }
 
-            crate::drivers::serial::write_str("ELF: vfs::read end\n");
+            crate::drivers::serial::write_str("ELF: after vfs::read block\n");
             after_vfs_op();
         }
 
         None => {
-            crate::drivers::serial::write_str("ELF: invalid path\n");
             crate::print!("Invalid path\n");
         }
     }
 }
 
-fn rmd_cmd(arg: &[u8]) {
+pub fn rm_cmd(arg: &[u8]) {
     let arg = trim_ascii(arg);
     let mut path_buf = [0u8; 128];
 
     match make_absolute_path(arg, &mut path_buf) {
         Some(path) => {
-            serial_log_path("[cmd] RMD path", path);
+            serial_log_path("[cmd] RM path", path);
 
-            if is_disk1_path(path) {
-                crate::print!("RMD on disk 1 is disabled for now\n");
-                crate::print!("Reason: FAT32/VFS write path is not stable yet\n");
-                crate::drivers::serial::write_str("[cmd] RMD blocked on disk 1\n");
+            if is_fat32_path(path) {
+                crate::print!("RM on /disk1 is disabled for now\n");
                 return;
             }
-
-            crate::drivers::serial::write_str("[cmd] RMD vfs::delete begin\n");
 
             match crate::fs::vfs::delete(path) {
                 Ok(()) => crate::print!("Deleted\n"),
 
                 Err(e) => {
-                    crate::drivers::serial::write_str("[cmd] RMD vfs::delete error: ");
-                    crate::drivers::serial::write_str(crate::fs::vfs::error_str(e));
-                    crate::drivers::serial::write_str("\n");
-
                     crate::kernel::write_raw(crate::fs::vfs::error_str(e));
                     crate::print!("\n");
                 }
             }
 
-            crate::drivers::serial::write_str("[cmd] RMD vfs::delete end\n");
             after_vfs_op();
         }
 
@@ -543,7 +727,8 @@ fn mount_cmd(arg: &[u8]) {
 
     if arg.is_empty() {
         crate::print!("Usage: MOUNT <IMAGE_PATH>\n");
-        crate::print!("   or: MOUNT \\\\DISK1 1:\\\n");
+        crate::print!("   or: MOUNT DISK1 /disk1\n");
+        crate::print!("   or: MOUNT \\\\DISK1 /disk1\n");
         return;
     }
 
@@ -560,12 +745,6 @@ fn mount_cmd(arg: &[u8]) {
         b""
     };
 
-    crate::drivers::serial::write_str("[cmd] MOUNT source='");
-    serial_write_bytes(source);
-    crate::drivers::serial::write_str("' target='");
-    serial_write_bytes(target);
-    crate::drivers::serial::write_str("'\n");
-
     if !target.is_empty() {
         mount_with_target(source, target);
         return;
@@ -575,8 +754,11 @@ fn mount_cmd(arg: &[u8]) {
 }
 
 fn mount_with_target(source: &[u8], target: &[u8]) {
-    if !eq_ignore_ascii_case(target, b"1:\\") && !eq_ignore_ascii_case(target, b"1:") {
-        crate::print!("Only target 1:\\ is supported\n");
+    if !eq_ignore_ascii_case(target, b"/disk1")
+        && !eq_ignore_ascii_case(target, b"1:\\")
+        && !eq_ignore_ascii_case(target, b"1:")
+    {
+        crate::print!("Only target /disk1 is supported\n");
         return;
     }
 
@@ -594,12 +776,8 @@ fn mount_with_target(source: &[u8], target: &[u8]) {
             return;
         }
 
-        crate::drivers::serial::write_str("[cmd] MOUNT physical ATA begin\n");
-
         match crate::fs::fat32::mount_first_ata() {
-            Ok(()) => {
-                crate::print!("Mounted physical ATA disk as 1:\\\n");
-            }
+            Ok(()) => crate::print!("Mounted physical ATA disk at /disk1\n"),
 
             Err(message) => {
                 crate::kernel::write_raw(message);
@@ -607,7 +785,6 @@ fn mount_with_target(source: &[u8], target: &[u8]) {
             }
         }
 
-        crate::drivers::serial::write_str("[cmd] MOUNT physical ATA end\n");
         after_vfs_op();
         return;
     }
@@ -620,39 +797,26 @@ fn mount_image_from_path(path_arg: &[u8]) {
 
     match make_absolute_path(path_arg, &mut path_buf) {
         Some(path) => {
-            serial_log_path("[cmd] MOUNT image path", path);
-
             if is_directory_path(path) {
                 crate::print!("Cannot mount a directory\n");
                 return;
             }
 
-            crate::drivers::serial::write_str("[cmd] MOUNT image vfs::read begin\n");
-
             match crate::fs::vfs::read(path) {
                 Ok(data) => {
-                    crate::drivers::serial::write_str("[cmd] MOUNT image read ok, size ");
-                    crate::drivers::serial::write_hex(data.len());
-                    crate::drivers::serial::write_str("\n");
-
                     if crate::fs::fat32::mount(data) {
-                        crate::print!("Mounted FAT32 image on disk 1\n");
+                        crate::print!("Mounted FAT32 image at /disk1\n");
                     } else {
                         crate::print!("Failed to mount image\n");
                     }
                 }
 
                 Err(error) => {
-                    crate::drivers::serial::write_str("[cmd] MOUNT image read error: ");
-                    crate::drivers::serial::write_str(crate::fs::vfs::error_str(error));
-                    crate::drivers::serial::write_str("\n");
-
                     crate::kernel::write_raw(crate::fs::vfs::error_str(error));
                     crate::print!("\n");
                 }
             }
 
-            crate::drivers::serial::write_str("[cmd] MOUNT image vfs::read end\n");
             after_vfs_op();
         }
 
@@ -662,14 +826,14 @@ fn mount_image_from_path(path_arg: &[u8]) {
 
 fn umount_cmd() {
     crate::fs::fat32::unmount();
-    crate::print!("Unmounted disk 1\n");
+    crate::print!("Unmounted /disk1\n");
 }
 
 fn diskinfo() {
     crate::print!("Disks\n");
-    crate::print!("====\n\n");
+    crate::print!("=====\n\n");
 
-    crate::kernel::write_raw("Disk 0: RAMFS\n");
+    crate::kernel::write_raw("ram:    RAMFS mounted at /ram\n");
 
     let pci = crate::drivers::pci::scan_storage();
     let ata = crate::drivers::pci::scan_legacy_ata();
@@ -678,12 +842,36 @@ fn diskinfo() {
         pci.total() > 0 || ata.channels > 0 || ata.ata_devices > 0 || ata.atapi_devices > 0;
 
     if crate::fs::fat32::is_mounted() {
-        crate::kernel::write_raw("Disk 1: FAT32 (mounted)\n");
+        crate::kernel::write_raw("disk1:  FAT32 mounted at /disk1\n");
     } else if has_storage {
-        crate::kernel::write_raw("Disk 1: Present (controller detected, not mounted)\n");
+        crate::kernel::write_raw("disk1:  present, not mounted\n");
     } else {
-        crate::kernel::write_raw("Disk 1: Not present\n");
+        crate::kernel::write_raw("disk1:  not present\n");
     }
+}
+
+fn mounts() {
+    crate::print!("Mounted filesystems:\n");
+    crate::print!("  rootfs    /\n");
+    crate::print!("  ramfs     /ram\n");
+
+    if crate::fs::fat32::is_mounted() {
+        crate::print!("  fat32     /disk1\n");
+    } else {
+        crate::print!("  disk1     not mounted\n");
+    }
+}
+
+fn tasks() {
+    crate::kernel::write_raw("Task count: ");
+
+    let mut buf = [0u8; 20];
+    crate::kernel::write_raw(crate::lib::u64_to_str(
+        crate::scheduler::task_count() as u64,
+        &mut buf,
+    ));
+
+    crate::print!("\n");
 }
 
 fn lsdev() {
@@ -707,21 +895,25 @@ fn lsdev() {
 
     crate::kernel::write_raw("Storage Ctrl:    IDE: ");
     crate::kernel::write_raw(crate::lib::u64_to_str(st.ide as u64, &mut buf));
+
+    let mut buf = [0u8; 20];
+
     crate::kernel::write_raw(", SATA/AHCI: ");
-
-    let mut buf = [0u8; 20];
     crate::kernel::write_raw(crate::lib::u64_to_str(st.sata as u64, &mut buf));
+
+    let mut buf = [0u8; 20];
+
     crate::kernel::write_raw(", SCSI: ");
-
-    let mut buf = [0u8; 20];
     crate::kernel::write_raw(crate::lib::u64_to_str(st.scsi as u64, &mut buf));
+
+    let mut buf = [0u8; 20];
+
     crate::kernel::write_raw(", NVMe: ");
-
-    let mut buf = [0u8; 20];
     crate::kernel::write_raw(crate::lib::u64_to_str(st.nvme as u64, &mut buf));
-    crate::kernel::write_raw(", Other: ");
 
     let mut buf = [0u8; 20];
+
+    crate::kernel::write_raw(", Other: ");
     crate::kernel::write_raw(crate::lib::u64_to_str(st.other as u64, &mut buf));
     crate::print!("\n");
 
@@ -740,125 +932,33 @@ fn lsdev() {
     crate::kernel::write_raw(", ATAPI drives: ");
     crate::kernel::write_raw(crate::lib::u64_to_str(ata.atapi_devices as u64, &mut buf));
     crate::print!("\n");
-
-    crate::kernel::write_raw("Disk 0:          RAMFS (writable)\n");
-
-    if crate::fs::fat32::is_mounted() {
-        crate::kernel::write_raw("Disk 1:          FAT32 (mounted)\n");
-    } else if st.total() > 0 || ata.channels > 0 || ata.ata_devices > 0 || ata.atapi_devices > 0 {
-        crate::kernel::write_raw("Disk 1:          Present (controller detected, not mounted)\n");
-    } else {
-        crate::kernel::write_raw("Disk 1:          Not detected\n");
-    }
 }
 
 fn cd_cmd(arg: &[u8]) {
-    let a = trim_ascii(arg);
+    let arg = trim_ascii(arg);
 
-    if a.is_empty() {
-        let cur = crate::fs::cwd::get();
-
-        let mut buf = [0u8; 128];
-        let mut len = 0usize;
-
-        for &b in cur.as_bytes() {
-            if len >= buf.len() {
-                break;
-            }
-
-            buf[len] = b;
-            len += 1;
-        }
-
-        if len == 0 || buf[len - 1] != b'\\' {
-            if len < buf.len() {
-                buf[len] = b'\\';
-                len += 1;
-            }
-        }
-
-        if let Ok(s) = core::str::from_utf8(&buf[..len]) {
-            let _ = crate::fs::cwd::set(s);
-        }
-
+    if arg.is_empty() {
+        let _ = crate::fs::cwd::set("/");
         return;
     }
 
-    if a == b".." {
-        let cur = crate::fs::cwd::get();
+    if arg == b"." {
+        return;
+    }
 
-        let mut buf = [0u8; 128];
-        let mut len = 0usize;
-
-        for &b in cur.as_bytes() {
-            if len >= buf.len() {
-                break;
-            }
-
-            buf[len] = b;
-            len += 1;
-        }
-
-        if len > 0 && buf[len - 1] == b'\\' && len > 3 {
-            len -= 1;
-        }
-
-        let mut pos = 0usize;
-
-        for i in 0..len {
-            if buf[i] == b'\\' {
-                pos = i;
-            }
-        }
-
-        let new_len = if pos + 1 < 3 { 3 } else { pos + 1 };
-
-        if new_len <= buf.len() {
-            if let Ok(s) = core::str::from_utf8(&buf[..new_len]) {
-                let _ = crate::fs::cwd::set(s);
-            }
-        }
-
+    if arg == b".." {
+        cd_parent();
         return;
     }
 
     let mut buf = [0u8; 128];
 
-    match make_absolute_path(a, &mut buf) {
+    match make_absolute_path(arg, &mut buf) {
         Some(path) => {
-            serial_log_path("[cmd] CD path", path);
-
-            let mut buf2 = [0u8; 128];
-            let mut len2 = 0usize;
-
-            for &b in path.as_bytes() {
-                if len2 >= buf2.len() {
-                    break;
-                }
-
-                buf2[len2] = b;
-                len2 += 1;
-            }
-
-            if len2 == 0 || buf2[len2 - 1] != b'\\' {
-                if len2 < buf2.len() {
-                    buf2[len2] = b'\\';
-                    len2 += 1;
-                }
-            }
-
-            let path_owned = match core::str::from_utf8(&buf2[..len2]) {
-                Ok(s) => s,
-
-                Err(_) => {
-                    crate::print!("Invalid path\n");
-                    return;
-                }
-            };
-
-            match crate::fs::vfs::parse_path(path_owned) {
+            match crate::fs::vfs::parse_path(path) {
                 Ok(_) => {
-                    let _ = crate::fs::cwd::set(path_owned);
+                    let normalized = ensure_no_trailing_slash_except_root(path);
+                    let _ = crate::fs::cwd::set(normalized);
                 }
 
                 Err(e) => {
@@ -872,14 +972,115 @@ fn cd_cmd(arg: &[u8]) {
     }
 }
 
-fn is_disk1_path(path: &str) -> bool {
-    let bytes = path.as_bytes();
+fn cd_parent() {
+    let cwd = crate::fs::cwd::get();
 
-    bytes.len() >= 2 && bytes[0] == b'1' && bytes[1] == b':'
+    if cwd == "/" {
+        return;
+    }
+
+    let bytes = cwd.as_bytes();
+    let mut end = bytes.len();
+
+    while end > 1 && bytes[end - 1] == b'/' {
+        end -= 1;
+    }
+
+    let mut slash = 0usize;
+
+    for i in 0..end {
+        if bytes[i] == b'/' {
+            slash = i;
+        }
+    }
+
+    let new_path = if slash == 0 {
+        "/"
+    } else {
+        match core::str::from_utf8(&bytes[..slash]) {
+            Ok(s) => s,
+            Err(_) => "/",
+        }
+    };
+
+    let _ = crate::fs::cwd::set(new_path);
+}
+
+fn ensure_no_trailing_slash_except_root(path: &str) -> &str {
+    if path == "/" {
+        return path;
+    }
+
+    let mut end = path.len();
+
+    while end > 1 && path.as_bytes()[end - 1] == b'/' {
+        end -= 1;
+    }
+
+    &path[..end]
+}
+
+fn is_fat32_path(path: &str) -> bool {
+    path == "/disk1" || path.starts_with("/disk1/") || path.starts_with("1:")
 }
 
 fn is_directory_path(path: &str) -> bool {
-    path.as_bytes().last().copied() == Some(b'\\')
+    path == "/" || path.ends_with('/')
+}
+
+fn split_first_word(input: &[u8]) -> Option<(&[u8], &[u8])> {
+    let input = trim_ascii(input);
+
+    if input.is_empty() {
+        return None;
+    }
+
+    let mut split = 0usize;
+
+    while split < input.len() && !input[split].is_ascii_whitespace() {
+        split += 1;
+    }
+
+    let first = &input[..split];
+    let rest = if split < input.len() {
+        trim_ascii(&input[split..])
+    } else {
+        b""
+    };
+
+    Some((first, rest))
+}
+
+fn print_hex_byte(byte: u8) {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+
+    crate::kernel::write_byte(HEX[(byte >> 4) as usize]);
+    crate::kernel::write_byte(HEX[(byte & 0x0f) as usize]);
+}
+
+fn print_hex_usize(value: usize) {
+    crate::kernel::write_raw("0x");
+
+    let mut started = false;
+
+    for i in (0..core::mem::size_of::<usize>() * 2).rev() {
+        let nibble = ((value >> (i * 4)) & 0x0f) as u8;
+
+        if nibble != 0 || started || i == 0 {
+            started = true;
+            print_hex_nibble(nibble);
+        }
+    }
+}
+
+fn print_hex_nibble(nibble: u8) {
+    let ch = match nibble {
+        0..=9 => b'0' + nibble,
+        10..=15 => b'a' + (nibble - 10),
+        _ => b'?',
+    };
+
+    crate::kernel::write_byte(ch);
 }
 
 fn serial_log_path(label: &str, path: &str) {
@@ -895,7 +1096,15 @@ fn serial_write_bytes(bytes: &[u8]) {
 
         Err(_) => {
             for &b in bytes {
-                if b.is_ascii_graphic() || b == b' ' || b == b'\\' || b == b':' || b == b'.' {
+                if b.is_ascii_graphic()
+                    || b == b' '
+                    || b == b'\\'
+                    || b == b'/'
+                    || b == b':'
+                    || b == b'.'
+                    || b == b'_'
+                    || b == b'-'
+                {
                     crate::drivers::serial::write_byte(b);
                 } else {
                     crate::drivers::serial::write_byte(b'?');

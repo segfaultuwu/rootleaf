@@ -3,6 +3,7 @@ pub mod input;
 pub mod path;
 pub mod tabs;
 pub mod editor;
+pub mod autorun;
 
 use core::cell::UnsafeCell;
 
@@ -47,7 +48,7 @@ static SHELL: ShellCell = ShellCell(UnsafeCell::new(Shell::new()));
 
 pub extern "C" fn shell_task(_arg: usize) -> ! {
     crate::drivers::serial::write_str("[shell] shell task started\n");
-
+    crate::shell::autorun::init();
     loop {
         unsafe {
             let shell = &mut *SHELL.0.get();
