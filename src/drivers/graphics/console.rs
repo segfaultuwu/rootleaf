@@ -2,6 +2,9 @@ use core::fmt;
 
 use crate::drivers::graphics::psf::Psf2;
 
+const TOP_BAR_ROWS: usize = 2;
+const BOTTOM_BAR_ROWS: usize = 1;
+
 #[derive(Clone, Copy)]
 pub struct ConsoleColor {
     pub r: u8,
@@ -13,6 +16,15 @@ impl ConsoleColor {
     pub const BLACK: Self = Self::rgb(0x00, 0x00, 0x00);
     pub const WHITE: Self = Self::rgb(0xff, 0xff, 0xff);
     pub const GREEN: Self = Self::rgb(0x00, 0xff, 0x00);
+
+    pub const DARK_BLUE: Self = Self::rgb(0x00, 0x00, 0xaa);
+    pub const BLUE: Self = Self::rgb(0x00, 0x00, 0xff);
+    pub const CYAN: Self = Self::rgb(0x00, 0xaa, 0xaa);
+    pub const GRAY: Self = Self::rgb(0xaa, 0xaa, 0xaa);
+    pub const DARK_GRAY: Self = Self::rgb(0x20, 0x20, 0x20);
+    pub const YELLOW: Self = Self::rgb(0xff, 0xff, 0x00);
+    pub const RED: Self = Self::rgb(0xff, 0x00, 0x00);
+    pub const LIGHT_GREEN: Self = Self::rgb(0x55, 0xff, 0x55);
 
     pub const fn rgb(r: u8, g: u8, b: u8) -> Self {
         Self { r, g, b }
@@ -26,10 +38,15 @@ pub struct ConsoleDriver {
     pub height: usize,
     pub pitch: usize,
     pub bytes_per_pixel: usize,
+
     pub cursor_x: usize,
     pub cursor_y: usize,
+
     pub cursor_visible: bool,
     pub blink_counter: usize,
+
+    pub fg: ConsoleColor,
+    pub bg: ConsoleColor,
 }
 
 impl ConsoleDriver {
@@ -48,11 +65,34 @@ impl ConsoleDriver {
             height,
             pitch,
             bytes_per_pixel,
+
             cursor_x: 0,
-            cursor_y: 0,
+            cursor_y: TOP_BAR_ROWS,
+
             cursor_visible: false,
             blink_counter: 0,
+
+            fg: ConsoleColor::WHITE,
+            bg: ConsoleColor::BLACK,
         }
+    }
+
+    pub fn init(&mut self) {
+        self.clear_screen();
+        self.draw_banner();
+        self.prompt();
+    }
+
+    pub fn clear_screen(&mut self) {
+        self.clear(ConsoleColor::BLACK);
+        self.cursor_x = 0;
+        self.cursor_y = self.content_start_row();
+        self.redraw_chrome();
+    }
+
+    pub fn redraw_chrome(&mut self) {
+        self.draw_top_bar();
+        self.draw_bottom_bar();
     }
 
     pub fn clear(&mut self, color: ConsoleColor) {
@@ -63,10 +103,174 @@ impl ConsoleDriver {
         }
 
         self.cursor_x = 0;
-        self.cursor_y = 0;
+        self.cursor_y = self.content_start_row();
+    }
+
+    pub fn set_colors(&mut self, fg: ConsoleColor, bg: ConsoleColor) {
+        self.fg = fg;
+        self.bg = bg;
+    }
+
+    pub fn reset_colors(&mut self) {
+        self.fg = ConsoleColor::WHITE;
+        self.bg = ConsoleColor::BLACK;
+    }
+
+    pub fn draw_top_bar(&mut self) {
+        let old_x = self.cursor_x;
+        let old_y = self.cursor_y;
+
+        self.fill_text_row(0, ConsoleColor::DARK_BLUE);
+        self.fill_text_row(1, ConsoleColor::BLACK);
+
+        let cols = self.cols();
+
+        self.write_str_at(
+            " ROOTLEAF KERNEL",
+            0,
+            0,
+            ConsoleColor::YELLOW,
+            ConsoleColor::DARK_BLUE,
+        );
+
+        let mem = crate::kernel::memory::memory_info();
+
+        let mut mem_buf = [0u8; 20];
+        let mem_str = crate::lib::u64_to_str(mem.usable_mib(), &mut mem_buf);
+
+        let prefix = "MEM: ";
+        let suffix = " MiB | Framebuffer | PS/2";
+
+        let right_len = prefix.len() + mem_str.len() + suffix.len();
+        let right_col = cols.saturating_sub(right_len + 1);
+
+        self.write_str_at(
+            prefix,
+            right_col,
+            0,
+            ConsoleColor::WHITE,
+            ConsoleColor::DARK_BLUE,
+        );
+
+        self.write_str_at(
+            mem_str,
+            right_col + prefix.len(),
+            0,
+            ConsoleColor::YELLOW,
+            ConsoleColor::DARK_BLUE,
+        );
+
+        self.write_str_at(
+            suffix,
+            right_col + prefix.len() + mem_str.len(),
+            0,
+            ConsoleColor::WHITE,
+            ConsoleColor::DARK_BLUE,
+        );
+
+        for col in 0..cols {
+            self.write_byte_at(b'-', col, 1, ConsoleColor::DARK_GRAY, ConsoleColor::BLACK);
+        }
+
+        self.cursor_x = old_x;
+        self.cursor_y = old_y;
+    }
+
+    pub fn draw_bottom_bar(&mut self) {
+        let old_x = self.cursor_x;
+        let old_y = self.cursor_y;
+
+        let row = self.bottom_bar_row();
+
+        self.fill_text_row(row, ConsoleColor::DARK_BLUE);
+
+        self.write_str_at(
+            " F1 Help | F2 Mem | F3 Disks | ESC Shell",
+            0,
+            row,
+            ConsoleColor::WHITE,
+            ConsoleColor::DARK_BLUE,
+        );
+
+        let right = env!("CARGO_PKG_VERSION");
+        let col = self.cols().saturating_sub(right.len() + 11);
+
+        self.write_str_at(
+            "Rootleaf ",
+            col,
+            row,
+            ConsoleColor::GRAY,
+            ConsoleColor::DARK_BLUE,
+        );
+
+        self.write_str_at(
+            right,
+            col + 9,
+            row,
+            ConsoleColor::YELLOW,
+            ConsoleColor::DARK_BLUE,
+        );
+
+        self.cursor_x = old_x;
+        self.cursor_y = old_y;
+    }
+
+    pub fn draw_banner(&mut self) {
+        self.write_colored(
+            "Rootleaf Kernel [Version ",
+            ConsoleColor::GREEN,
+            ConsoleColor::BLACK,
+        );
+
+        self.write_colored(
+            env!("CARGO_PKG_VERSION"),
+            ConsoleColor::CYAN,
+            ConsoleColor::BLACK,
+        );
+
+        self.write_colored("]\n", ConsoleColor::GREEN, ConsoleColor::BLACK);
+
+        self.write_colored(
+            "(C) 2026 Rootleaf community\n",
+            ConsoleColor::GRAY,
+            ConsoleColor::BLACK,
+        );
+
+        self.write_colored("\n", ConsoleColor::WHITE, ConsoleColor::BLACK);
+
+        self.write_colored("Type ", ConsoleColor::GRAY, ConsoleColor::BLACK);
+
+        self.write_colored("HELP", ConsoleColor::CYAN, ConsoleColor::BLACK);
+
+        self.write_colored(
+            " for available commands.\n\n",
+            ConsoleColor::GRAY,
+            ConsoleColor::BLACK,
+        );
+    }
+
+    pub fn prompt(&mut self) {
+        /*
+            Lepiej docelowo zmienić CURRENT_PATH na:
+                pub static CURRENT_PATH: &str = "0:\\>";
+            zamiast static mut.
+
+            Jeśli masz teraz `static mut CURRENT_PATH`, to zostawiam kompatybilność.
+        */
+        self.write_colored(
+            unsafe { crate::CURRENT_PATH },
+            ConsoleColor::LIGHT_GREEN,
+            ConsoleColor::BLACK,
+        );
+
+        self.write_byte(b' ');
     }
 
     pub fn draw_cursor(&mut self, fg: ConsoleColor, bg: ConsoleColor) {
+        if self.cursor_y < self.content_start_row() || self.cursor_y >= self.content_end_row() {
+            return;
+        }
+
         let glyph_width = self.font_width();
         let glyph_height = self.font_height();
 
@@ -83,8 +287,12 @@ impl ConsoleDriver {
 
     pub fn tick_cursor(&mut self) {
         self.blink_counter = self.blink_counter.wrapping_add(1);
-        // Toggle roughly every 500000 ticks; caller decides tick frequency.
+
         if self.blink_counter % 500000 != 0 {
+            return;
+        }
+
+        if self.cursor_y < self.content_start_row() || self.cursor_y >= self.content_end_row() {
             return;
         }
 
@@ -93,8 +301,7 @@ impl ConsoleDriver {
         if self.cursor_visible {
             self.draw_cursor(ConsoleColor::WHITE, ConsoleColor::BLACK);
         } else {
-            // Erase cursor by redrawing a space at cursor position.
-            self.draw_char(b' ', ConsoleColor::WHITE, ConsoleColor::BLACK);
+            self.draw_char(b' ', self.fg, self.bg);
         }
     }
 
@@ -109,7 +316,7 @@ impl ConsoleDriver {
             return;
         }
 
-        self.fb[offset + 0] = color.b;
+        self.fb[offset] = color.b;
         self.fb[offset + 1] = color.g;
         self.fb[offset + 2] = color.r;
 
@@ -127,18 +334,9 @@ impl ConsoleDriver {
                     self.write_byte(b' ');
                 }
             }
-            b'\x08' => {
-                // Backspace: move cursor back and erase the character
-                if self.cursor_x > 0 {
-                    self.cursor_x -= 1;
-                } else if self.cursor_y > 0 {
-                    self.cursor_y -= 1;
-                    self.cursor_x = self.cols().saturating_sub(1);
-                }
-                self.draw_char(b' ', ConsoleColor::WHITE, ConsoleColor::BLACK);
-            }
+            b'\x08' => self.backspace(),
             byte => {
-                self.draw_char(byte, ConsoleColor::WHITE, ConsoleColor::BLACK);
+                self.draw_char(byte, self.fg, self.bg);
                 self.cursor_x += 1;
 
                 if self.cursor_x >= self.cols() {
@@ -148,10 +346,92 @@ impl ConsoleDriver {
         }
     }
 
+    pub fn backspace(&mut self) {
+        if self.cursor_x > 0 {
+            self.cursor_x -= 1;
+        } else if self.cursor_y > self.content_start_row() {
+            self.cursor_y -= 1;
+            self.cursor_x = self.cols().saturating_sub(1);
+        } else {
+            return;
+        }
+
+        self.draw_char(b' ', self.fg, self.bg);
+    }
+
+    pub fn write_colored(&mut self, text: &str, fg: ConsoleColor, bg: ConsoleColor) {
+        for byte in text.bytes() {
+            match byte {
+                b'\n' => self.newline(),
+                b'\r' => self.cursor_x = 0,
+                b'\t' => {
+                    for _ in 0..4 {
+                        self.write_colored(" ", fg, bg);
+                    }
+                }
+                b'\x08' => self.backspace(),
+                byte => {
+                    self.draw_char(byte, fg, bg);
+                    self.cursor_x += 1;
+
+                    if self.cursor_x >= self.cols() {
+                        self.newline();
+                    }
+                }
+            }
+        }
+    }
+
     pub fn write_str_raw(&mut self, s: &str) {
         for byte in s.bytes() {
             self.write_byte(byte);
         }
+    }
+
+    pub fn write_str_at(
+        &mut self,
+        text: &str,
+        col: usize,
+        row: usize,
+        fg: ConsoleColor,
+        bg: ConsoleColor,
+    ) {
+        let old_x = self.cursor_x;
+        let old_y = self.cursor_y;
+
+        self.cursor_x = col;
+        self.cursor_y = row;
+
+        for byte in text.bytes() {
+            if self.cursor_x >= self.cols() || self.cursor_y >= self.rows() {
+                break;
+            }
+
+            self.draw_char(byte, fg, bg);
+            self.cursor_x += 1;
+        }
+
+        self.cursor_x = old_x;
+        self.cursor_y = old_y;
+    }
+
+    pub fn write_byte_at(
+        &mut self,
+        byte: u8,
+        col: usize,
+        row: usize,
+        fg: ConsoleColor,
+        bg: ConsoleColor,
+    ) {
+        let old_x = self.cursor_x;
+        let old_y = self.cursor_y;
+
+        self.cursor_x = col;
+        self.cursor_y = row;
+        self.draw_char(byte, fg, bg);
+
+        self.cursor_x = old_x;
+        self.cursor_y = old_y;
     }
 
     pub fn draw_char(&mut self, byte: u8, fg: ConsoleColor, bg: ConsoleColor) {
@@ -174,7 +454,12 @@ impl ConsoleDriver {
         let base_x = self.cursor_x * glyph_width;
         let base_y = self.cursor_y * glyph_height;
 
+        if base_x >= self.width || base_y >= self.height {
+            return;
+        }
+
         let glyph_offset = glyph_index * bytes_per_glyph;
+
         if glyph_offset + bytes_per_glyph > glyphs_len {
             return;
         }
@@ -201,39 +486,96 @@ impl ConsoleDriver {
         self.cursor_x = 0;
         self.cursor_y += 1;
 
-        if self.cursor_y >= self.rows() {
+        if self.cursor_y >= self.content_end_row() {
             self.scroll();
-            self.cursor_y = self.rows().saturating_sub(1);
+            self.cursor_y = self.content_end_row().saturating_sub(1);
         }
     }
 
     pub fn scroll(&mut self) {
         let glyph_height = self.font_height();
-        let scroll_bytes = glyph_height * self.pitch;
 
-        if scroll_bytes >= self.fb.len() {
+        let start_row = self.content_start_row();
+        let end_row = self.content_end_row();
+
+        if end_row <= start_row + 1 {
             return;
         }
 
-        let len = self.fb.len();
+        let start_y = start_row * glyph_height;
+        let end_y = end_row * glyph_height;
 
-        for i in 0..(len - scroll_bytes) {
-            self.fb[i] = self.fb[i + scroll_bytes];
+        if start_y >= self.height || end_y > self.height {
+            return;
         }
 
-        let start = len - scroll_bytes;
+        let row_bytes = glyph_height * self.pitch;
+        let start_offset = start_y * self.pitch;
+        let end_offset = end_y * self.pitch;
 
-        for i in start..len {
+        if start_offset + row_bytes >= end_offset || end_offset > self.fb.len() {
+            return;
+        }
+
+        for i in start_offset..(end_offset - row_bytes) {
+            self.fb[i] = self.fb[i + row_bytes];
+        }
+
+        let clear_start = end_offset - row_bytes;
+
+        for i in clear_start..end_offset {
             self.fb[i] = 0;
+        }
+
+        self.redraw_chrome();
+    }
+
+    pub fn fill_text_row(&mut self, row: usize, color: ConsoleColor) {
+        let glyph_height = self.font_height();
+        let y_start = row * glyph_height;
+        let y_end = y_start + glyph_height;
+
+        if y_start >= self.height {
+            return;
+        }
+
+        for y in y_start..y_end.min(self.height) {
+            for x in 0..self.width {
+                self.put_pixel(x, y, color);
+            }
         }
     }
 
     pub fn cols(&self) -> usize {
-        self.width / self.font_width()
+        let w = self.font_width();
+
+        if w == 0 {
+            return 0;
+        }
+
+        self.width / w
     }
 
     pub fn rows(&self) -> usize {
-        self.height / self.font_height()
+        let h = self.font_height();
+
+        if h == 0 {
+            return 0;
+        }
+
+        self.height / h
+    }
+
+    pub fn content_start_row(&self) -> usize {
+        TOP_BAR_ROWS
+    }
+
+    pub fn content_end_row(&self) -> usize {
+        self.rows().saturating_sub(BOTTOM_BAR_ROWS)
+    }
+
+    pub fn bottom_bar_row(&self) -> usize {
+        self.rows().saturating_sub(1)
     }
 
     fn font_width(&self) -> usize {
@@ -251,8 +593,8 @@ impl ConsoleDriver {
     fn bytes_per_glyph(&self) -> usize {
         self.font.char_size() as usize
     }
-
 }
+
 impl fmt::Write for ConsoleDriver {
     fn write_str(&mut self, s: &str) -> fmt::Result {
         self.write_str_raw(s);

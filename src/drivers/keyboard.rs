@@ -1,6 +1,6 @@
-use core::sync::atomic::{AtomicUsize, AtomicBool, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
-use crate::arch::x86_64::port::{inb, outb, io_wait};
+use crate::arch::x86_64::port::{inb, io_wait, outb};
 use crate::kernel::input;
 
 const KEYBOARD_DATA_PORT: u16 = 0x60;
@@ -154,19 +154,91 @@ fn scancode_to_ascii(scancode: u8, shift: bool, caps: bool) -> Option<u8> {
     let ch = match scancode {
         0x01 => 0x1B, // Escape
 
-        0x02 => if shift { b'!' } else { b'1' },
-        0x03 => if shift { b'@' } else { b'2' },
-        0x04 => if shift { b'#' } else { b'3' },
-        0x05 => if shift { b'$' } else { b'4' },
-        0x06 => if shift { b'%' } else { b'5' },
-        0x07 => if shift { b'^' } else { b'6' },
-        0x08 => if shift { b'&' } else { b'7' },
-        0x09 => if shift { b'*' } else { b'8' },
-        0x0A => if shift { b'(' } else { b'9' },
-        0x0B => if shift { b')' } else { b'0' },
+        0x02 => {
+            if shift {
+                b'!'
+            } else {
+                b'1'
+            }
+        }
+        0x03 => {
+            if shift {
+                b'@'
+            } else {
+                b'2'
+            }
+        }
+        0x04 => {
+            if shift {
+                b'#'
+            } else {
+                b'3'
+            }
+        }
+        0x05 => {
+            if shift {
+                b'$'
+            } else {
+                b'4'
+            }
+        }
+        0x06 => {
+            if shift {
+                b'%'
+            } else {
+                b'5'
+            }
+        }
+        0x07 => {
+            if shift {
+                b'^'
+            } else {
+                b'6'
+            }
+        }
+        0x08 => {
+            if shift {
+                b'&'
+            } else {
+                b'7'
+            }
+        }
+        0x09 => {
+            if shift {
+                b'*'
+            } else {
+                b'8'
+            }
+        }
+        0x0A => {
+            if shift {
+                b'('
+            } else {
+                b'9'
+            }
+        }
+        0x0B => {
+            if shift {
+                b')'
+            } else {
+                b'0'
+            }
+        }
 
-        0x0C => if shift { b'_' } else { b'-' },
-        0x0D => if shift { b'+' } else { b'=' },
+        0x0C => {
+            if shift {
+                b'_'
+            } else {
+                b'-'
+            }
+        }
+        0x0D => {
+            if shift {
+                b'+'
+            } else {
+                b'='
+            }
+        }
         0x0E => b'\x08', // Backspace
         0x0F => b'\t',
 
@@ -181,8 +253,20 @@ fn scancode_to_ascii(scancode: u8, shift: bool, caps: bool) -> Option<u8> {
         0x18 => letter(b'o', shift, caps),
         0x19 => letter(b'p', shift, caps),
 
-        0x1A => if shift { b'{' } else { b'[' },
-        0x1B => if shift { b'}' } else { b']' },
+        0x1A => {
+            if shift {
+                b'{'
+            } else {
+                b'['
+            }
+        }
+        0x1B => {
+            if shift {
+                b'}'
+            } else {
+                b']'
+            }
+        }
         0x1C => b'\n',
 
         0x1E => letter(b'a', shift, caps),
@@ -195,11 +279,35 @@ fn scancode_to_ascii(scancode: u8, shift: bool, caps: bool) -> Option<u8> {
         0x25 => letter(b'k', shift, caps),
         0x26 => letter(b'l', shift, caps),
 
-        0x27 => if shift { b':' } else { b';' },
-        0x28 => if shift { b'"' } else { b'\'' },
-        0x29 => if shift { b'~' } else { b'`' },
+        0x27 => {
+            if shift {
+                b':'
+            } else {
+                b';'
+            }
+        }
+        0x28 => {
+            if shift {
+                b'"'
+            } else {
+                b'\''
+            }
+        }
+        0x29 => {
+            if shift {
+                b'~'
+            } else {
+                b'`'
+            }
+        }
 
-        0x2B => if shift { b'|' } else { b'\\' },
+        0x2B => {
+            if shift {
+                b'|'
+            } else {
+                b'\\'
+            }
+        }
 
         0x2C => letter(b'z', shift, caps),
         0x2D => letter(b'x', shift, caps),
@@ -209,12 +317,32 @@ fn scancode_to_ascii(scancode: u8, shift: bool, caps: bool) -> Option<u8> {
         0x31 => letter(b'n', shift, caps),
         0x32 => letter(b'm', shift, caps),
 
-        0x33 => if shift { b'<' } else { b',' },
-        0x34 => if shift { b'>' } else { b'.' },
-        0x35 => if shift { b'?' } else { b'/' },
+        0x33 => {
+            if shift {
+                b'<'
+            } else {
+                b','
+            }
+        }
+        0x34 => {
+            if shift {
+                b'>'
+            } else {
+                b'.'
+            }
+        }
+        0x35 => {
+            if shift {
+                b'?'
+            } else {
+                b'/'
+            }
+        }
 
         0x39 => b' ',
-
+        0x3B => crate::kernel::input::KEY_F1, // F1
+        0x3C => crate::kernel::input::KEY_F2, // F2
+        0x3D => crate::kernel::input::KEY_F3, // F3
         _ => return None,
     };
 

@@ -2,6 +2,11 @@ use core::sync::atomic::{AtomicUsize, Ordering};
 
 const INPUT_BUF_SIZE: usize = 1024;
 
+pub const KEY_F1: u8 = 0xF1;
+pub const KEY_F2: u8 = 0xF2;
+pub const KEY_F3: u8 = 0xF3;
+pub const KEY_ESC: u8 = 0x1B;
+
 static mut INPUT_BUF: [u8; INPUT_BUF_SIZE] = [0; INPUT_BUF_SIZE];
 static HEAD: AtomicUsize = AtomicUsize::new(0);
 static TAIL: AtomicUsize = AtomicUsize::new(0);
