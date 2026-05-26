@@ -1,5 +1,3 @@
-use core::arch::asm;
-
 const EI_CLASS: usize = 4;
 const EI_DATA: usize = 5;
 const EI_VERSION: usize = 6;
@@ -56,6 +54,8 @@ struct LoadedSeg {
     host_base: *mut u8,
 }
 
+type UserEntry = extern "C" fn(usize) -> isize;
+
 fn align_up(value: usize, align: usize) -> Option<usize> {
     if align == 0 {
         return Some(value);
@@ -66,32 +66,8 @@ fn align_up(value: usize, align: usize) -> Option<usize> {
 }
 
 fn invoke_user_entry(entry: *const (), syscall_ptr: usize) -> isize {
-    let ret: isize;
-
-    unsafe {
-        asm!(
-            "push rbx",
-            "push rbp",
-            "push r12",
-            "push r13",
-            "push r14",
-            "push r15",
-            "mov rax, {entry}",
-            "call rax",
-            "pop r15",
-            "pop r14",
-            "pop r13",
-            "pop r12",
-            "pop rbp",
-            "pop rbx",
-            in("rdi") syscall_ptr,
-            entry = in(reg) entry,
-            lateout("rax") ret,
-            clobber_abi("C"),
-        );
-    }
-
-    ret
+    let entry_fn: UserEntry = unsafe { core::mem::transmute(entry) };
+    entry_fn(syscall_ptr)
 }
 
 fn parse_header(data: &[u8]) -> Option<&Elf64Ehdr> {

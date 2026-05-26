@@ -90,7 +90,9 @@ run: iso disk
 		-cdrom $(ISO) \
 		-drive file=$(DISK_IMG),if=ide,format=raw \
 		-m 256M \
-		-serial stdio
+		-serial stdio \
+		-no-reboot \
+		-no-shutdown
 
 clean:
 	rm -rf target iso_root/boot/kernel.elf $(ISO) $(DISK_IMG) $(USER_ELF_OBJ) $(USER_ELF_BIN)

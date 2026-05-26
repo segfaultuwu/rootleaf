@@ -147,6 +147,10 @@ pub extern "C" fn _start() -> ! {
     arch::x86_64::init();
     drivers::keyboard::init();
 
+    if crate::fs::fat32::mount_first_ata().is_ok() {
+        drivers::serial::write_str("Rootleaf: auto-mounted \\\\DISK1 as 1:\\\n");
+    }
+
     let mut shell = crate::shell::Shell::new();
 
     loop {
