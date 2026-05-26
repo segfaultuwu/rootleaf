@@ -13,5 +13,4 @@ pub fn init() {
             return;
         }
     }
-    crate::print!("Autorun: no autorun script found\n");
 }
