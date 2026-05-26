@@ -24,7 +24,13 @@ pub fn init() {
     idt::init_idt();
 
     unsafe {
-        pic::enable_irq(1);
+        const USE_KEYBOARD_IRQ: bool = false;
+
+        if USE_KEYBOARD_IRQ {
+            pic::enable_irq(1);
+        } else {
+            crate::drivers::serial::write_str("[kbd] IRQ1 disabled, using polling mode\n");
+        }
         enable_interrupts();
     }
 

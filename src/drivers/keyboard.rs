@@ -12,57 +12,84 @@ static EXTENDED_SCANCODE: AtomicBool = AtomicBool::new(false);
 static IRQ_COUNTER: AtomicUsize = AtomicUsize::new(0);
 
 pub fn init() {
-    unsafe fn wait_for_write() {
-        for _ in 0..1_000_000 {
-            if inb(KEYBOARD_STATUS_PORT) & 2 == 0 {
+    crate::drivers::serial::write_str("[kbd] init: minimal VBox-safe PS/2 init\n");
+
+    unsafe fn status() -> u8 {
+        inb(KEYBOARD_STATUS_PORT)
+    }
+
+    unsafe fn flush_output() {
+        for _ in 0..256 {
+            if status() & 0x01 == 0 {
                 break;
             }
+
+            let _ = inb(KEYBOARD_DATA_PORT);
             io_wait();
         }
     }
 
-    unsafe fn wait_for_read() {
-        for _ in 0..1_000_000 {
-            if inb(KEYBOARD_STATUS_PORT) & 1 != 0 {
-                break;
+    unsafe fn wait_input_clear() -> bool {
+        for _ in 0..10_000 {
+            if status() & 0x02 == 0 {
+                return true;
             }
+
             io_wait();
         }
+
+        false
     }
 
     unsafe {
-        // 1. Disable first PS/2 port while configuring
-        wait_for_write();
-        outb(KEYBOARD_STATUS_PORT, 0xAD);
+        crate::drivers::serial::write_str("[kbd] init: flushing output buffer\n");
+        flush_output();
 
-        // 2. Flush output buffer
-        while inb(KEYBOARD_STATUS_PORT) & 1 != 0 {
-            inb(KEYBOARD_DATA_PORT);
+        /*
+            VBox-safe:
+            - do not send 0xAD
+            - do not send 0x20
+            - do not send 0x60
+            - do not send keyboard command 0xF4
+
+            VirtualBox can freeze on controller config reads or keyboard ACK waits.
+            BIOS/firmware usually already leaves the keyboard in a usable state.
+        */
+
+        crate::drivers::serial::write_str("[kbd] init: enabling first PS/2 port only\n");
+
+        if wait_input_clear() {
+            outb(KEYBOARD_STATUS_PORT, 0xAE);
+            io_wait();
+            crate::drivers::serial::write_str("[kbd] init: first PS/2 port enable command sent\n");
+        } else {
+            crate::drivers::serial::write_str("[kbd] init: timeout before 0xAE, skipping\n");
         }
 
-        // 3. Read configuration byte
-        wait_for_write();
-        outb(KEYBOARD_STATUS_PORT, 0x20);
-        wait_for_read();
-        let mut config = inb(KEYBOARD_DATA_PORT);
-
-        // 4. Enable first PS/2 port interrupts
-        config |= 1;
-
-        // 5. Write configuration byte
-        wait_for_write();
-        outb(KEYBOARD_STATUS_PORT, 0x60);
-        wait_for_write();
-        outb(KEYBOARD_DATA_PORT, config);
-
-        // 6. Enable first PS/2 port
-        wait_for_write();
-        outb(KEYBOARD_STATUS_PORT, 0xAE);
+        flush_output();
     }
+
+    SHIFT_PRESSED.store(false, Ordering::SeqCst);
+    CAPS_LOCK.store(false, Ordering::SeqCst);
+    EXTENDED_SCANCODE.store(false, Ordering::SeqCst);
+    IRQ_COUNTER.store(0, Ordering::SeqCst);
+
+    crate::drivers::serial::write_str("[kbd] init: done\n");
 }
 
 pub fn handle_interrupt() {
+    let status = unsafe { inb(KEYBOARD_STATUS_PORT) };
+
+    if status & 1 == 0 {
+        return;
+    }
+
     let scancode = unsafe { inb(KEYBOARD_DATA_PORT) };
+
+    if scancode == 0 {
+        return;
+    }
+
     handle_scancode(scancode);
 }
 

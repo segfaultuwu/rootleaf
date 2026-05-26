@@ -172,6 +172,20 @@ pub fn spawn(entry: usize, arg: usize) -> Result<usize, &'static str> {
         push(&mut sp, 0); // r14
         push(&mut sp, 0); // r15
 
+        crate::drivers::serial::write_str("[sched] final sp=");
+        crate::drivers::serial::write_hex(sp);
+        crate::drivers::serial::write_str(" peek words:");
+
+        // Print first 6 words from the new stack for verification
+        for i in 0..6usize {
+            let addr = (sp + i * core::mem::size_of::<usize>()) as *const usize;
+            let val = unsafe { core::ptr::read(addr) };
+            crate::drivers::serial::write_str(" ");
+            crate::drivers::serial::write_hex(val);
+        }
+
+        crate::drivers::serial::write_str("\n");
+
         let id = NEXT_TASK_ID.fetch_add(1, Ordering::SeqCst);
 
         tasks[idx] = Task {

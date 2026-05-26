@@ -142,9 +142,13 @@ extern "x86-interrupt" fn page_fault_handler(
 }
 
 extern "x86-interrupt" fn keyboard_interrupt_handler(_stack_frame: InterruptStackFrame) {
+    crate::drivers::serial::write_str("[int] keyboard handler enter\n");
     crate::drivers::keyboard::handle_interrupt();
+    crate::drivers::serial::write_str("[int] keyboard handler after handle_interrupt\n");
 
     unsafe {
+        crate::drivers::serial::write_str("[int] keyboard handler sending EOI\n");
         crate::arch::x86_64::pic::send_eoi(1);
+        crate::drivers::serial::write_str("[int] keyboard handler sent EOI\n");
     }
 }

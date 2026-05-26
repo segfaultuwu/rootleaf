@@ -112,18 +112,12 @@ pub extern "C" fn _start() -> ! {
     drivers::serial::write_str("Rootleaf: framebuffer console initialized\n");
 
     arch::x86_64::init();
+    drivers::serial::write_str("Rootleaf: CPU features detected\n");
     drivers::keyboard::init();
-
-    /*
-        Mount disk before starting shell task.
-
-        Important:
-        Do not call scheduler::init() before this and then again after this.
-        scheduler::init() must be called exactly once.
-    */
+    drivers::serial::write_str("Rootleaf: keyboard initialized\n");
     match crate::fs::fat32::mount_first_ata() {
         Ok(()) => {
-            drivers::serial::write_str("Rootleaf: auto-mounted \\\\DISK1 as 1:\\\n");
+            drivers::serial::write_str("Rootleaf: auto-mounted \\DISK1 as /disk1\n");
         }
 
         Err(message) => {

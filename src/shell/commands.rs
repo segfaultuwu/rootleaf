@@ -180,6 +180,12 @@ pub fn execute_command(command: &[u8]) {
         return;
     }
 
+    // If the user typed a path-like token (./app.elf, /disk1/app.elf, etc.), try executing it.
+    if command.starts_with(b"./") || command.starts_with(b"/") || command.iter().any(|&c| c == b'/') {
+        elf_cmd(command);
+        return;
+    }
+
     crate::print!("Bad command or file name\n");
 }
 

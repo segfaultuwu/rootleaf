@@ -68,10 +68,16 @@ pub unsafe fn disable_irq(irq: u8) {
 
 pub unsafe fn send_eoi(irq: u8) {
     unsafe {
+        crate::drivers::serial::write_str("[pic] send_eoi start\n");
         if irq >= 8 {
+            crate::drivers::serial::write_str("[pic] eoi to slave\n");
             outb(PIC2_COMMAND, PIC_EOI);
+            crate::drivers::serial::write_str("[pic] eoi to slave done\n");
         }
 
+        crate::drivers::serial::write_str("[pic] eoi to master\n");
         outb(PIC1_COMMAND, PIC_EOI);
+        crate::drivers::serial::write_str("[pic] eoi to master done\n");
+        crate::drivers::serial::write_str("[pic] send_eoi end\n");
     }
 }
