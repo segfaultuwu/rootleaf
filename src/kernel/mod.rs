@@ -2,6 +2,8 @@ pub mod input;
 pub mod panic;
 pub mod print;
 pub mod sync;
+pub mod syscall;
+pub mod elf64;
 
 pub use panic::hlt_loop;
 pub use print::clear_console;

@@ -28,3 +28,5 @@ target
 /iso_root
 /limine
 rootleaf.iso
+*.log
+*.img

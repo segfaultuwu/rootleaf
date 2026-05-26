@@ -1,11 +1,14 @@
 pub mod idt;
 pub mod pic;
 pub mod port;
+pub mod cpu;
 
 pub fn init() {
     unsafe {
         pic::remap();
     }
+
+    cpu::init();
 
     // Debug: print PIC masks after remap
     let pic1_mask = unsafe { crate::arch::x86_64::port::inb(0x21) };

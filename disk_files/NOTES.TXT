@@ -1,0 +1,3 @@
+Commands:
+  ELF 0:\APP.ELF
+  TYPE 0:\README.TXT

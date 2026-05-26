@@ -2,6 +2,7 @@ pub mod commands;
 pub mod input;
 pub mod path;
 pub mod tabs;
+pub mod editor;
 
 pub struct Shell {
     line: [u8; 128],

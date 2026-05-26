@@ -16,6 +16,7 @@ pub enum VfsError {
     InvalidDisk,
     NotFound,
     NotUtf8,
+    WriteFailed,
 }
 
 pub type VfsResult<T> = Result<T, VfsError>;
@@ -76,9 +77,47 @@ pub fn read(path: &str) -> VfsResult<&'static [u8]> {
         0 => {
             let relative = normalize_relative_path(parsed.path);
 
-            match crate::fs::ramfs::find(relative.as_bytes()) {
-                Some(file) => Ok(file.data),
+            match crate::fs::ramfs::read(relative.as_bytes()) {
+                Some(data) => Ok(data),
                 None => Err(VfsError::NotFound),
+            }
+        }
+        1 => {
+            let relative = normalize_relative_path(parsed.path);
+            crate::fs::fat32::read_file(relative)
+        }
+
+        _ => Err(VfsError::InvalidDisk),
+    }
+}
+
+pub fn write(path: &str, data: &[u8]) -> VfsResult<()> {
+    let parsed = parse_path(path)?;
+
+    match parsed.disk {
+        0 => {
+            let relative = normalize_relative_path(parsed.path);
+            if crate::fs::ramfs::write(relative.as_bytes(), data) {
+                Ok(())
+            } else {
+                Err(VfsError::WriteFailed)
+            }
+        }
+
+        _ => Err(VfsError::InvalidDisk),
+    }
+}
+
+pub fn delete(path: &str) -> VfsResult<()> {
+    let parsed = parse_path(path)?;
+
+    match parsed.disk {
+        0 => {
+            let relative = normalize_relative_path(parsed.path);
+            if crate::fs::ramfs::delete(relative.as_bytes()) {
+                Ok(())
+            } else {
+                Err(VfsError::NotFound)
             }
         }
 
@@ -113,5 +152,6 @@ pub fn error_str(error: VfsError) -> &'static str {
         VfsError::InvalidDisk => "Invalid disk",
         VfsError::NotFound => "File not found",
         VfsError::NotUtf8 => "File is not valid UTF-8",
+        VfsError::WriteFailed => "Write failed",
     }
 }

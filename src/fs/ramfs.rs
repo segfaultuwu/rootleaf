@@ -23,6 +23,27 @@ static FILES: &[RamFile] = &[
     },
 ];
 
+const USER_MAX: usize = 32;
+const USER_NAME_LEN: usize = 64;
+const USER_DATA_LEN: usize = 8192;
+
+#[derive(Clone, Copy)]
+struct UserFile {
+    used: bool,
+    name: [u8; USER_NAME_LEN],
+    name_len: usize,
+    data: [u8; USER_DATA_LEN],
+    data_len: usize,
+}
+
+static mut USER_FILES: [UserFile; USER_MAX] = [UserFile {
+    used: false,
+    name: [0; USER_NAME_LEN],
+    name_len: 0,
+    data: [0; USER_DATA_LEN],
+    data_len: 0,
+}; USER_MAX];
+
 pub fn files() -> &'static [RamFile] {
     FILES
 }
@@ -35,6 +56,97 @@ pub fn find(name: &[u8]) -> Option<&'static RamFile> {
     }
 
     None
+}
+
+fn find_user_slot(name: &[u8]) -> Option<usize> {
+    unsafe {
+        for i in 0..USER_MAX {
+            if !USER_FILES[i].used {
+                continue;
+            }
+
+            if eq_ignore_ascii_case(name, &USER_FILES[i].name[..USER_FILES[i].name_len]) {
+                return Some(i);
+            }
+        }
+    }
+
+    None
+}
+
+pub fn read(name: &[u8]) -> Option<&'static [u8]> {
+    if let Some(i) = find_user_slot(name) {
+        unsafe {
+            return Some(&USER_FILES[i].data[..USER_FILES[i].data_len]);
+        }
+    }
+
+    find(name).map(|f| f.data)
+}
+
+pub fn write(name: &[u8], data: &[u8]) -> bool {
+    if name.is_empty() || name.len() > USER_NAME_LEN || data.len() > USER_DATA_LEN {
+        return false;
+    }
+
+    unsafe {
+        if let Some(i) = find_user_slot(name) {
+            USER_FILES[i].data[..data.len()].copy_from_slice(data);
+            USER_FILES[i].data_len = data.len();
+            return true;
+        }
+
+        for i in 0..USER_MAX {
+            if USER_FILES[i].used {
+                continue;
+            }
+
+            USER_FILES[i].used = true;
+            USER_FILES[i].name.fill(0);
+            USER_FILES[i].name[..name.len()].copy_from_slice(name);
+            USER_FILES[i].name_len = name.len();
+            USER_FILES[i].data[..data.len()].copy_from_slice(data);
+            USER_FILES[i].data_len = data.len();
+            return true;
+        }
+    }
+
+    false
+}
+
+pub fn delete(name: &[u8]) -> bool {
+    if let Some(i) = find_user_slot(name) {
+        unsafe {
+            USER_FILES[i].used = false;
+            USER_FILES[i].name_len = 0;
+            USER_FILES[i].data_len = 0;
+        }
+        return true;
+    }
+
+    false
+}
+
+pub fn print_dir() {
+    for file in FILES {
+        crate::kernel::write_raw("  ");
+        crate::kernel::write_raw(file.name);
+        crate::print!("\n");
+    }
+
+    unsafe {
+        for i in 0..USER_MAX {
+            if !USER_FILES[i].used {
+                continue;
+            }
+
+            if let Ok(name) = core::str::from_utf8(&USER_FILES[i].name[..USER_FILES[i].name_len]) {
+                crate::kernel::write_raw("  ");
+                crate::kernel::write_raw(name);
+                crate::print!("\n");
+            }
+        }
+    }
 }
 
 pub fn count() -> usize {

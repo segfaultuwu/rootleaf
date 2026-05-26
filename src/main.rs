@@ -26,7 +26,7 @@ use crate::lib::u32_to_str;
 
 static PSF_FONT: &[u8] = include_bytes!("../assets/ter-u16n.psf");
 
-pub static CURRENT_PATH: &str = "0:\\";
+// current working directory managed via fs::cwd
 
 struct ConsoleStorage(UnsafeCell<MaybeUninit<ConsoleDriver>>);
 
@@ -53,6 +53,9 @@ pub extern "C" fn _start() -> ! {
     };
 
     memory::init();
+
+    // initialize current working directory
+    crate::fs::cwd::init("0:\\");
 
     drivers::serial::write_str("Rootleaf: PSF font loaded, glyphs: ");
 
@@ -108,7 +111,17 @@ pub extern "C" fn _start() -> ! {
         }
 
         if ok {
-            Some(unsafe { core::slice::from_raw_parts_mut(start_addr as *mut u8, fb_size) })
+            let bb_start = start_addr as usize;
+            let bb_end = bb_start.saturating_add(fb_size);
+            let fb_start = fb_slice.as_ptr() as usize;
+            let fb_end = fb_start.saturating_add(fb_size);
+            let overlaps = bb_start < fb_end && fb_start < bb_end;
+
+            if overlaps {
+                None
+            } else {
+                Some(unsafe { core::slice::from_raw_parts_mut(start_addr as *mut u8, fb_size) })
+            }
         } else {
             None
         }

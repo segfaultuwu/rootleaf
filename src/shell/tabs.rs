@@ -74,13 +74,35 @@ pub fn show_disks_tab() {
     crate::print!("=====\n\n");
 
     crate::print!("Disk 0: RAMFS\n");
-    crate::print!("Disk 1: Not present\n\n");
+    let pci = crate::drivers::pci::scan_storage();
+    let ata = crate::drivers::pci::scan_legacy_ata();
 
-    crate::print!("Planned:\n");
-    crate::print!("  - AHCI/SATA detection\n");
-    crate::print!("  - NVMe detection\n");
-    crate::print!("  - FAT32 reader\n");
-    crate::print!("  - DIR command from real filesystem\n\n");
+    if crate::fs::fat32::is_mounted() {
+        crate::print!("Disk 1: FAT32 (mounted)\n\n");
+    } else if pci.total() > 0 || ata.channels > 0 || ata.ata_devices > 0 || ata.atapi_devices > 0 {
+        crate::print!("Disk 1: Present (controller detected, not mounted)\n\n");
+    } else {
+        crate::print!("Disk 1: Not present\n\n");
+    }
+
+    let mut buf = [0u8; 20];
+    crate::kernel::write_raw("- PCI IDE: ");
+    crate::kernel::write_raw(crate::lib::u64_to_str(pci.ide as u64, &mut buf));
+    crate::kernel::write_raw(", SATA/AHCI: ");
+    crate::kernel::write_raw(crate::lib::u64_to_str(pci.sata as u64, &mut buf));
+    crate::kernel::write_raw(", SCSI: ");
+    crate::kernel::write_raw(crate::lib::u64_to_str(pci.scsi as u64, &mut buf));
+    crate::kernel::write_raw(", NVMe: ");
+    crate::kernel::write_raw(crate::lib::u64_to_str(pci.nvme as u64, &mut buf));
+    crate::print!("\n");
+
+    crate::kernel::write_raw("- Legacy ATA channels: ");
+    crate::kernel::write_raw(crate::lib::u64_to_str(ata.channels as u64, &mut buf));
+    crate::kernel::write_raw(", ATA: ");
+    crate::kernel::write_raw(crate::lib::u64_to_str(ata.ata_devices as u64, &mut buf));
+    crate::kernel::write_raw(", ATAPI: ");
+    crate::kernel::write_raw(crate::lib::u64_to_str(ata.atapi_devices as u64, &mut buf));
+    crate::print!("\n");
 
     crate::kernel::prompt();
 }

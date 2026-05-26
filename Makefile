@@ -1,10 +1,16 @@
 KERNEL := target/x86_64-unknown-none/debug/rootleaf_kernel
 ISO := rootleaf.iso
 LIMINE_DIR := limine
+DISK_IMG := rootleaf_disk.img
+DISK_MB := 64
+DISK_DIR := disk_files
+USER_ELF_SRC := $(DISK_DIR)/hello.S
+USER_ELF_OBJ := $(DISK_DIR)/hello.o
+USER_ELF_BIN := $(DISK_DIR)/APP.ELF
 
-.PHONY: all kernel limine iso run clean
+.PHONY: all kernel limine iso disk run clean
 
-all: iso
+all: iso disk
 
 kernel:
 	cargo build
@@ -39,11 +45,52 @@ iso: kernel limine
 
 	$(LIMINE_DIR)/limine bios-install $(ISO)
 
-run: iso
+$(DISK_DIR):
+	mkdir -p $(DISK_DIR)
+
+$(DISK_DIR)/README.TXT: | $(DISK_DIR)
+	printf "Rootleaf QEMU disk\n" > $(DISK_DIR)/README.TXT
+	printf "This is a FAT32 image attached as a second drive.\n" >> $(DISK_DIR)/README.TXT
+
+$(DISK_DIR)/NOTES.TXT: | $(DISK_DIR)
+	printf "Commands:\n" > $(DISK_DIR)/NOTES.TXT
+	printf "  ELF 1:\\APP.ELF\n" >> $(DISK_DIR)/NOTES.TXT
+	printf "  TYPE 1:\\README.TXT\n" >> $(DISK_DIR)/NOTES.TXT
+
+$(USER_ELF_BIN): $(USER_ELF_SRC) | $(DISK_DIR)
+	@if command -v as >/dev/null && command -v ld >/dev/null; then \
+		as --64 -o $(USER_ELF_OBJ) $(USER_ELF_SRC); \
+		ld -nostdlib -static -e _start -o $(USER_ELF_BIN) $(USER_ELF_OBJ); \
+	else \
+		echo "as/ld not found, using kernel ELF as placeholder APP.ELF"; \
+		cp $(KERNEL) $(USER_ELF_BIN); \
+	fi
+
+disk: kernel $(DISK_DIR)/README.TXT $(DISK_DIR)/NOTES.TXT $(USER_ELF_BIN)
+	rm -f $(DISK_IMG)
+	dd if=/dev/zero of=$(DISK_IMG) bs=1M count=$(DISK_MB) status=none
+	@if command -v mkfs.fat >/dev/null; then \
+		mkfs.fat -F 32 $(DISK_IMG) >/dev/null; \
+	elif command -v mkfs.vfat >/dev/null; then \
+		mkfs.vfat -F 32 $(DISK_IMG) >/dev/null; \
+	else \
+		echo "mkfs.fat/mkfs.vfat not found"; \
+		exit 1; \
+	fi
+	@if command -v mcopy >/dev/null; then \
+		mcopy -i $(DISK_IMG) -s $(DISK_DIR)/* ::/; \
+	else \
+		echo "mcopy (mtools) not found"; \
+		exit 1; \
+	fi
+
+run: iso disk
 	qemu-system-x86_64 \
+		-boot order=d \
 		-cdrom $(ISO) \
+		-drive file=$(DISK_IMG),if=ide,format=raw \
 		-m 256M \
-		-serial stdio \
+		-serial stdio
 
 clean:
-	rm -rf target iso_root/boot/kernel.elf $(ISO)
+	rm -rf target iso_root/boot/kernel.elf $(ISO) $(DISK_IMG) $(USER_ELF_OBJ) $(USER_ELF_BIN)

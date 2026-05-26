@@ -60,7 +60,7 @@ pub fn make_absolute_path<'a>(input: &'a [u8], buffer: &'a mut [u8; 128]) -> Opt
         return core::str::from_utf8(input).ok();
     }
 
-    let prefix = unsafe { crate::CURRENT_PATH.as_bytes() };
+    let prefix = crate::fs::cwd::get().as_bytes();
 
     let mut len = 0usize;
 

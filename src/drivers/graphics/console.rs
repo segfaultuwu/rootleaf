@@ -39,6 +39,7 @@ pub struct ConsoleDriver {
     pub height: usize,
     pub pitch: usize,
     pub bytes_per_pixel: usize,
+    pub dirty: bool,
 
     pub cursor_x: usize,
     pub cursor_y: usize,
@@ -77,6 +78,7 @@ impl ConsoleDriver {
 
             fg: ConsoleColor::WHITE,
             bg: ConsoleColor::BLACK,
+            dirty: false,
         }
     }
 
@@ -88,15 +90,40 @@ impl ConsoleDriver {
     }
 
     pub fn present(&mut self) {
+        if !self.dirty {
+            return;
+        }
+
         if let Some(ref b) = self.back_buffer {
             let src: &[u8] = &*b;
             let dst: &mut [u8] = &mut *self.fb;
 
             let len = core::cmp::min(dst.len(), src.len());
 
-            unsafe {
-                core::ptr::copy_nonoverlapping(src.as_ptr(), dst.as_mut_ptr(), len);
+            let src_start = src.as_ptr() as usize;
+            let src_end = src_start.saturating_add(len);
+            let dst_start = dst.as_ptr() as usize;
+            let dst_end = dst_start.saturating_add(len);
+
+            let overlaps = src_start < dst_end && dst_start < src_end;
+
+            if overlaps {
+                if dst_start <= src_start {
+                    for index in 0..len {
+                        dst[index] = src[index];
+                    }
+                } else {
+                    let mut index = len;
+                    while index > 0 {
+                        index -= 1;
+                        dst[index] = src[index];
+                    }
+                }
+            } else {
+                dst[..len].copy_from_slice(&src[..len]);
             }
+            // clear dirty flag after presenting
+            self.dirty = false;
         }
     }
 
@@ -273,11 +300,7 @@ impl ConsoleDriver {
     }
 
     pub fn prompt(&mut self) {
-        self.write_colored(
-            unsafe { crate::CURRENT_PATH },
-            ConsoleColor::LIGHT_GREEN,
-            ConsoleColor::BLACK,
-        );
+        self.write_colored(crate::fs::cwd::get(), ConsoleColor::LIGHT_GREEN, ConsoleColor::BLACK);
 
         self.write_colored(">", ConsoleColor::LIGHT_GREEN, ConsoleColor::BLACK);
 
@@ -343,6 +366,10 @@ impl ConsoleDriver {
 
         if bpp >= 4 && offset + 3 < fb.len() {
             fb[offset + 3] = 0x00;
+        }
+
+        if self.back_buffer.is_some() {
+            self.dirty = true;
         }
     }
 
@@ -543,18 +570,14 @@ impl ConsoleDriver {
         let move_len = end_offset.saturating_sub(start_offset).saturating_sub(row_bytes);
 
         if move_len > 0 {
-            unsafe {
-                let src_ptr = fb.as_ptr().add(start_offset + row_bytes);
-                let dst_ptr = fb.as_mut_ptr().add(start_offset);
-
-                core::ptr::copy(src_ptr, dst_ptr, move_len);
-            }
+            fb.copy_within(start_offset + row_bytes..end_offset, start_offset);
         }
 
         let clear_start = end_offset - row_bytes;
+        fb[clear_start..end_offset].fill(0);
 
-        unsafe {
-            core::ptr::write_bytes(fb.as_mut_ptr().add(clear_start), 0, row_bytes);
+        if self.back_buffer.is_some() {
+            self.dirty = true;
         }
 
         self.redraw_chrome();
