@@ -39,3 +39,25 @@ pub fn write_str(s: &str) {
         }
     }
 }
+
+pub fn write_hex(value: usize) {
+    write_str("0x");
+
+    let mut started = false;
+
+    for i in (0..core::mem::size_of::<usize>() * 2).rev() {
+        let nibble = ((value >> (i * 4)) & 0xF) as u8;
+
+        if nibble != 0 || started || i == 0 {
+            started = true;
+
+            let ch = match nibble {
+                0..=9 => b'0' + nibble,
+                10..=15 => b'a' + (nibble - 10),
+                _ => b'?',
+            };
+
+            write_byte(ch);
+        }
+    }
+}

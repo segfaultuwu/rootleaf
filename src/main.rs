@@ -10,6 +10,7 @@ mod kernel;
 mod lib;
 mod memory;
 mod shell;
+mod scheduler;
 
 #[macro_use]
 mod macros;
@@ -33,6 +34,17 @@ struct ConsoleStorage(UnsafeCell<MaybeUninit<ConsoleDriver>>);
 unsafe impl Sync for ConsoleStorage {}
 
 static CONSOLE_STORAGE: ConsoleStorage = ConsoleStorage(UnsafeCell::new(MaybeUninit::uninit()));
+
+extern "C" fn test_task(arg: usize) -> ! {
+    loop {
+        crate::drivers::serial::write_str("[task] alive\n");
+        for _ in 0..10_000_000 {
+            core::hint::spin_loop();
+        }
+
+        crate::scheduler::yield_now();
+    }
+}
 
 #[unsafe(no_mangle)]
 pub extern "C" fn _start() -> ! {
@@ -147,29 +159,20 @@ pub extern "C" fn _start() -> ! {
     arch::x86_64::init();
     drivers::keyboard::init();
 
+    crate::scheduler::init();
+
+    
     if crate::fs::fat32::mount_first_ata().is_ok() {
         drivers::serial::write_str("Rootleaf: auto-mounted \\\\DISK1 as 1:\\\n");
     }
+    
+    crate::scheduler::init();
 
-    let mut shell = crate::shell::Shell::new();
+    crate::scheduler::spawn(crate::shell::shell_task as usize, 0)
+        .expect("failed to spawn shell task");
 
     loop {
-        if let Some(byte) = crate::kernel::input::dequeue() {
-            shell.handle_input_byte(byte);
-            continue;
-        }
-
-        let irq_count = crate::drivers::keyboard::take_irq_count();
-
-        if irq_count > 0 {
-            continue;
-        }
-
-        crate::drivers::keyboard::poll_once();
-        crate::kernel::tick_cursor();
-
-        // Present double-buffer contents if enabled
-        crate::kernel::present();
+        crate::scheduler::yield_now();
 
         unsafe {
             core::arch::asm!("pause", options(nomem, nostack));

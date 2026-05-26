@@ -203,28 +203,23 @@ pub fn run(data: &[u8]) -> Result<isize, &'static str> {
     crate::drivers::serial::write_str("ELF: host entry resolved\n");
 
     crate::kernel::syscall::reset_process_state();
-    crate::drivers::serial::write_str("ELF: process state reset\n");
 
-    crate::drivers::serial::write_str("ELF: invoking entry\n");
-    unsafe {
-        core::arch::asm!("cli", options(nomem, nostack));
-    }
-    crate::drivers::serial::write_str("ELF: interrupts disabled\n");
-    let ret = invoke_user_entry(
-        host_entry as *const (),
-        crate::kernel::syscall::linux_syscall as *const () as usize,
-    );
-    unsafe {
-        core::arch::asm!("sti", options(nomem, nostack));
-    }
-    crate::drivers::serial::write_str("ELF: interrupts enabled\n");
-    crate::drivers::serial::write_str("ELF: returned from entry\n");
+    match crate::scheduler::spawn(
+        host_entry as usize,
+        crate::kernel::syscall::linux_syscall as usize,
+    ) {
+        Ok(_tid) => {
+            crate::drivers::serial::write_str("ELF: task spawned\n");
 
-    if let Some(code) = crate::kernel::syscall::take_exit_code() {
-        crate::drivers::serial::write_str("ELF: exit code from syscall state\n");
-        Ok(code)
-    } else {
-        crate::drivers::serial::write_str("ELF: return code from entry\n");
-        Ok(ret)
+            loop {
+                if let Some(code) = crate::kernel::syscall::take_exit_code() {
+                    crate::drivers::serial::write_str("ELF: task exited\n");
+                    return Ok(code);
+                }
+
+                crate::scheduler::yield_now();
+            }
+        }
+        Err(_) => Err("Failed to spawn task"),
     }
 }

@@ -51,12 +51,21 @@ pub extern "C" fn linux_syscall(
         SYS_GETPID => 1,
         SYS_EXIT => {
             crate::drivers::serial::write_str("ELF: syscall EXIT\n");
-            EXIT_CODE.store(a1 as isize, Ordering::SeqCst);
-            EXITED.store(true, Ordering::SeqCst);
-            0
+            sys_exit(a1 as isize)
         }
         _ => ENOSYS,
     }
+}
+
+fn sys_exit(code: isize) -> ! {
+    EXIT_CODE.store(code, Ordering::SeqCst);
+    EXITED.store(true, Ordering::SeqCst);
+
+    crate::drivers::serial::write_str("ELF: process exited with code ");
+    crate::drivers::serial::write_hex(code as usize);
+    crate::drivers::serial::write_str("\n");
+
+    crate::scheduler::exit_current_task();
 }
 
 fn sys_write(fd: usize, buf: *const u8, len: usize) -> isize {
