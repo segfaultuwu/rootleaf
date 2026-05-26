@@ -55,6 +55,26 @@ pub fn make_absolute_path<'a>(input: &[u8], buffer: &'a mut [u8; 128]) -> Option
 
     let input_str = core::str::from_utf8(input).ok()?;
 
+    // Accept shorthand mount prefixes like "disk1/..." or "ram/..." as
+    // equivalent to "/disk1/..." or "/ram/..." so users can type
+    // `elf disk1/app.elf` instead of `/disk1/app.elf`.
+    if starts_with_mount_shorthand(input_str, "disk1")
+        || starts_with_mount_shorthand(input_str, "ram")
+        || starts_with_mount_shorthand(input_str, "dev")
+        || starts_with_mount_shorthand(input_str, "proc")
+    {
+        // produce an absolute path in the buffer: '/' + input
+        let mut len = 0usize;
+        push_byte(buffer, &mut len, b'/')?;
+        copy_bytes(input, buffer, &mut len)?;
+        normalize_slashes_in_place(buffer, &mut len);
+        while len > 1 && buffer[len - 1] == b'/' {
+            len -= 1;
+        }
+
+        return core::str::from_utf8(&buffer[..len]).ok();
+    }
+
     if is_legacy_disk_path(input_str) {
         return legacy_to_linux_path(input_str, buffer);
     }
@@ -177,4 +197,28 @@ fn normalize_slashes_in_place(buffer: &mut [u8; 128], len: &mut usize) {
     }
 
     *len = write;
+}
+
+fn starts_with_mount_shorthand(path: &str, mount: &str) -> bool {
+    let p = path.as_bytes();
+    let m = mount.as_bytes();
+
+    if p.len() < m.len() {
+        return false;
+    }
+
+    // case-insensitive compare for mount name
+    for i in 0..m.len() {
+        if to_ascii_upper(p[i]) != to_ascii_upper(m[i]) {
+            return false;
+        }
+    }
+
+    // either exact match (e.g., "disk1") or followed by a slash/backslash
+    if p.len() == m.len() {
+        return true;
+    }
+
+    let next = p[m.len()];
+    next == b'/' || next == b'\\'
 }

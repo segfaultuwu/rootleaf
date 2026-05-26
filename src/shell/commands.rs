@@ -372,6 +372,31 @@ fn dir_resolved(path: &str) {
                         crate::print!("\n");
                     }
                 }
+
+                VfsBackend::Dev => {
+                    let relative = crate::fs::vfs::normalize_path(parsed.path);
+
+                    if relative.is_empty() {
+                        crate::print!("null\n");
+                        crate::print!("zero\n");
+                        crate::print!("console\n");
+                        crate::print!("keyboard\n");
+                    } else {
+                        crate::print!("Not a directory\n");
+                    }
+                }
+
+                VfsBackend::Proc => {
+                    let relative = crate::fs::vfs::normalize_path(parsed.path);
+
+                    if relative.is_empty() {
+                        crate::print!("version\n");
+                        crate::print!("cpuinfo\n");
+                        crate::print!("mounts\n");
+                    } else {
+                        crate::print!("Not a directory\n");
+                    }
+                }
             }
         }
 

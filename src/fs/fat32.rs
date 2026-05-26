@@ -1,6 +1,6 @@
 use crate::fs::vfs::VfsError;
 
-const FILE_READ_BUFFER_SIZE: usize = 2 * 1024 * 1024;
+const FILE_READ_BUFFER_SIZE: usize = 4 * 1024 * 1024; // 4MiB
 static mut FILE_READ_BUFFER: [u8; FILE_READ_BUFFER_SIZE] = [0u8; FILE_READ_BUFFER_SIZE];
 
 #[derive(Clone, Copy)]
@@ -42,6 +42,10 @@ pub fn mount(data: &'static [u8]) -> bool {
 }
 
 pub fn mount_first_ata() -> Result<(), &'static str> {
+    if is_mounted() {
+        return Ok(());
+    }
+
     let sectors = match crate::drivers::ata::first_disk_sectors() {
         Some(s) if s > 0 => s,
         _ => return Err("No ATA disk found"),
@@ -61,7 +65,10 @@ pub fn unmount() {
 }
 
 pub fn is_mounted() -> bool {
-    unsafe { MOUNTED.is_some() }
+    unsafe {
+        let ptr = core::ptr::addr_of!(MOUNTED);
+        (*ptr).is_some()
+    }
 }
 
 fn mounted() -> Option<&'static [u8]> {
@@ -263,8 +270,13 @@ pub fn print_dir(path: &str) -> Result<(), VfsError> {
 pub fn read_file(path: &str) -> Result<&'static [u8], VfsError> {
     let meta = match parse_meta() {
         Some(m) => m,
-        None => return Err(VfsError::InvalidDisk),
+        None => {
+            crate::drivers::serial::write_str("[fat32] parse_meta failed\n");
+            return Err(VfsError::InvalidDisk);
+        }
     };
+
+    crate::drivers::serial::write_str("[fat32] meta ok\n");
 
     // split path (only support single filename in root for now)
     let p = path.trim_start_matches('\\');
@@ -313,6 +325,13 @@ pub fn read_file(path: &str) -> Result<&'static [u8], VfsError> {
                 let size = read_u32(&entry, 28) as usize;
                 found_start = Some(start);
                 found_size = size;
+                crate::drivers::serial::write_str("[fat32] found file: ");
+                crate::drivers::serial::write_str(&s);
+                crate::drivers::serial::write_str(" start=");
+                crate::drivers::serial::write_hex(start as usize);
+                crate::drivers::serial::write_str(" size=");
+                crate::drivers::serial::write_hex(size);
+                crate::drivers::serial::write_str("\n");
                 break;
             }
         }
@@ -330,6 +349,7 @@ pub fn read_file(path: &str) -> Result<&'static [u8], VfsError> {
     let start = match found_start { Some(s) => s, None => return Err(VfsError::NotFound) };
 
     if found_size > FILE_READ_BUFFER_SIZE {
+        crate::drivers::serial::write_str("[fat32] file too large for buffer\n");
         return Err(VfsError::InvalidDisk);
     }
 
@@ -346,6 +366,13 @@ pub fn read_file(path: &str) -> Result<&'static [u8], VfsError> {
 
         let to_copy = core::cmp::min(meta.spc * meta.bps, found_size - out_written);
         if !read_bytes(off, &mut dest[out_written..out_written + to_copy]) {
+            crate::drivers::serial::write_str("[fat32] read_bytes failed: off=");
+            crate::drivers::serial::write_hex(off);
+            crate::drivers::serial::write_str(" to_copy=");
+            crate::drivers::serial::write_hex(to_copy);
+            crate::drivers::serial::write_str(" cur_cluster=");
+            crate::drivers::serial::write_hex(cur as usize);
+            crate::drivers::serial::write_str("\n");
             return Err(VfsError::InvalidDisk);
         }
         out_written += to_copy;
