@@ -19,6 +19,8 @@ use core::mem::MaybeUninit;
 
 use crate::boot::limine::{BASE_REVISION, FRAMEBUFFER_REQUEST};
 use crate::drivers::graphics::{ConsoleDriver, Psf2};
+use crate::memory::alloc_frame;
+use crate::memory::addr::PAGE_SIZE;
 use crate::kernel::{hlt_loop, init_console};
 use crate::lib::u32_to_str;
 
@@ -85,10 +87,38 @@ pub extern "C" fn _start() -> ! {
     let fb_slice: &'static mut [u8] =
         unsafe { core::slice::from_raw_parts_mut(framebuffer.address() as *mut u8, fb_size) };
 
+    // Try to allocate a contiguous back buffer of the same size (double buffering).
+    let back_buffer: Option<&'static mut [u8]> = {
+        let pages = (fb_size + PAGE_SIZE as usize - 1) / PAGE_SIZE as usize;
+        let mut start_addr: u64 = 0;
+        let mut ok = true;
+
+        for i in 0..pages {
+            match alloc_frame() {
+                Some(f) => {
+                    if i == 0 {
+                        start_addr = f.addr;
+                    }
+                }
+                None => {
+                    ok = false;
+                    break;
+                }
+            }
+        }
+
+        if ok {
+            Some(unsafe { core::slice::from_raw_parts_mut(start_addr as *mut u8, fb_size) })
+        } else {
+            None
+        }
+    };
+
     let console: &'static mut ConsoleDriver = unsafe {
         (*CONSOLE_STORAGE.0.get()).write(ConsoleDriver::new(
             font,
             fb_slice,
+            back_buffer,
             framebuffer.width as usize,
             framebuffer.height as usize,
             framebuffer.pitch as usize,
@@ -120,6 +150,9 @@ pub extern "C" fn _start() -> ! {
 
         crate::drivers::keyboard::poll_once();
         crate::kernel::tick_cursor();
+
+        // Present double-buffer contents if enabled
+        crate::kernel::present();
 
         unsafe {
             core::arch::asm!("pause", options(nomem, nostack));

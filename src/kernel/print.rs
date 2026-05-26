@@ -32,6 +32,12 @@ pub fn tick_cursor() {
     });
 }
 
+pub fn present() {
+    let _ = with_console(|console| {
+        console.present();
+    });
+}
+
 pub fn prompt() {
     let _ = with_console(|console| {
         console.prompt();

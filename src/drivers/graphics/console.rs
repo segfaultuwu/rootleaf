@@ -34,6 +34,7 @@ impl ConsoleColor {
 pub struct ConsoleDriver {
     pub font: Psf2,
     pub fb: &'static mut [u8],
+    pub back_buffer: Option<&'static mut [u8]>,
     pub width: usize,
     pub height: usize,
     pub pitch: usize,
@@ -53,6 +54,7 @@ impl ConsoleDriver {
     pub fn new(
         font: Psf2,
         fb: &'static mut [u8],
+        back_buffer: Option<&'static mut [u8]>,
         width: usize,
         height: usize,
         pitch: usize,
@@ -61,6 +63,7 @@ impl ConsoleDriver {
         Self {
             font,
             fb,
+            back_buffer,
             width,
             height,
             pitch,
@@ -74,6 +77,26 @@ impl ConsoleDriver {
 
             fg: ConsoleColor::WHITE,
             bg: ConsoleColor::BLACK,
+        }
+    }
+
+    fn framebuffer_mut(&mut self) -> &mut [u8] {
+        match self.back_buffer {
+            Some(ref mut b) => b,
+            None => self.fb,
+        }
+    }
+
+    pub fn present(&mut self) {
+        if let Some(ref b) = self.back_buffer {
+            let src: &[u8] = &*b;
+            let dst: &mut [u8] = &mut *self.fb;
+
+            let len = core::cmp::min(dst.len(), src.len());
+
+            unsafe {
+                core::ptr::copy_nonoverlapping(src.as_ptr(), dst.as_mut_ptr(), len);
+            }
         }
     }
 
@@ -307,16 +330,19 @@ impl ConsoleDriver {
 
         let offset = y * self.pitch + x * self.bytes_per_pixel;
 
-        if offset + 2 >= self.fb.len() {
+        let bpp = self.bytes_per_pixel;
+        let fb = self.framebuffer_mut();
+
+        if offset + 2 >= fb.len() {
             return;
         }
 
-        self.fb[offset] = color.b;
-        self.fb[offset + 1] = color.g;
-        self.fb[offset + 2] = color.r;
+        fb[offset] = color.b;
+        fb[offset + 1] = color.g;
+        fb[offset + 2] = color.r;
 
-        if self.bytes_per_pixel >= 4 && offset + 3 < self.fb.len() {
-            self.fb[offset + 3] = 0x00;
+        if bpp >= 4 && offset + 3 < fb.len() {
+            fb[offset + 3] = 0x00;
         }
     }
 
@@ -508,18 +534,27 @@ impl ConsoleDriver {
         let start_offset = start_y * self.pitch;
         let end_offset = end_y * self.pitch;
 
-        if start_offset + row_bytes >= end_offset || end_offset > self.fb.len() {
+        let fb = self.framebuffer_mut();
+
+        if start_offset + row_bytes >= end_offset || end_offset > fb.len() {
             return;
         }
 
-        for i in start_offset..(end_offset - row_bytes) {
-            self.fb[i] = self.fb[i + row_bytes];
+        let move_len = end_offset.saturating_sub(start_offset).saturating_sub(row_bytes);
+
+        if move_len > 0 {
+            unsafe {
+                let src_ptr = fb.as_ptr().add(start_offset + row_bytes);
+                let dst_ptr = fb.as_mut_ptr().add(start_offset);
+
+                core::ptr::copy(src_ptr, dst_ptr, move_len);
+            }
         }
 
         let clear_start = end_offset - row_bytes;
 
-        for i in clear_start..end_offset {
-            self.fb[i] = 0;
+        unsafe {
+            core::ptr::write_bytes(fb.as_mut_ptr().add(clear_start), 0, row_bytes);
         }
 
         self.redraw_chrome();
