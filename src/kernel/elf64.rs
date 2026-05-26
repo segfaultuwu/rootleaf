@@ -262,17 +262,23 @@ pub fn run(data: &[u8]) -> Result<isize, &'static str> {
         entry,
         crate::kernel::syscall::linux_syscall as usize,
     ) {
-        Ok(_tid) => {
+        Ok(tid) => {
+            crate::kernel::syscall::set_foreground_task(tid);
+
             crate::drivers::serial::write_str("ELF: task spawned\n");
 
-            loop {
+            let code = loop {
                 if let Some(code) = crate::kernel::syscall::take_exit_code() {
-                    crate::drivers::serial::write_str("ELF: task exited\n");
-                    return Ok(code);
+                    break code;
                 }
 
                 crate::scheduler::yield_now();
-            }
+            };
+
+            crate::kernel::syscall::set_foreground_task(0);
+
+            crate::drivers::serial::write_str("ELF: task exited\n");
+            Ok(code)
         }
 
         Err(_) => Err("Failed to spawn task"),

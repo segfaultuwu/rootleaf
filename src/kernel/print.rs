@@ -52,13 +52,9 @@ pub fn clear_console() {
 }
 
 pub fn write_raw(s: &str) {
-    if with_console(|console| {
+    with_console(|console| {
         console.write_str_raw(s);
-    })
-    .is_none()
-    {
-        crate::drivers::serial::write_str(s);
-    }
+    });
 }
 
 pub struct KernelWriter;

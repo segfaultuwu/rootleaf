@@ -9,6 +9,11 @@ pub fn show_help_tab() {
     crate::print!("  F2      Memory tab\n");
     crate::print!("  F3      Disks tab\n");
     crate::print!("  ESC     Return to shell\n\n");
+    crate::print!("Virtual filesystems:\n");
+    crate::print!("  /dev/null      Empty device\n");
+    crate::print!("  /dev/zero      Zero device\n");
+    crate::print!("  /proc/version  Kernel version\n");
+    crate::print!("  /proc/cpuinfo  CPU info\n\n");
 
     crate::print!("Commands:\n");
     crate::print!("  HELP    Show help\n");

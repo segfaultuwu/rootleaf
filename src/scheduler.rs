@@ -281,6 +281,25 @@ pub fn current_task_index() -> usize {
     CURRENT_TASK.load(Ordering::SeqCst)
 }
 
+pub fn kill_task_by_id(id: usize) -> bool {
+    unsafe {
+        let tasks = &mut *TASKS.0.get();
+
+        for i in 0..MAX_TASKS {
+            if tasks[i].id == id {
+                if tasks[i].state != TaskState::Empty && tasks[i].state != TaskState::Dead {
+                    tasks[i].state = TaskState::Dead;
+                    return true;
+                }
+
+                return false;
+            }
+        }
+    }
+
+    false
+}
+
 pub fn task_count() -> usize {
     unsafe {
         let tasks = &*TASKS.0.get();

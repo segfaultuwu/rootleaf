@@ -8,6 +8,7 @@ const KEYBOARD_STATUS_PORT: u16 = 0x64;
 
 static SHIFT_PRESSED: AtomicBool = AtomicBool::new(false);
 static CAPS_LOCK: AtomicBool = AtomicBool::new(false);
+static CTRL_PRESSED: AtomicBool = AtomicBool::new(false);
 static EXTENDED_SCANCODE: AtomicBool = AtomicBool::new(false);
 static IRQ_COUNTER: AtomicUsize = AtomicUsize::new(0);
 
@@ -116,6 +117,16 @@ fn handle_scancode(scancode: u8) {
     }
 
     match scancode {
+        0x1D => {
+            CTRL_PRESSED.store(true, Ordering::SeqCst);
+            return;
+        }
+
+        0x9D => {
+            CTRL_PRESSED.store(false, Ordering::SeqCst);
+            return;
+        }
+
         // Left shift press / right shift press
         0x2A | 0x36 => {
             SHIFT_PRESSED.store(true, Ordering::SeqCst);
@@ -145,8 +156,19 @@ fn handle_scancode(scancode: u8) {
 
     let shift = SHIFT_PRESSED.load(Ordering::SeqCst);
     let caps = CAPS_LOCK.load(Ordering::SeqCst);
+    let ctrl = CTRL_PRESSED.load(Ordering::SeqCst);
 
     if let Some(byte) = scancode_to_ascii(scancode, shift, caps) {
+        let byte = if ctrl && byte.is_ascii_alphabetic() {
+            byte.to_ascii_lowercase() - b'a' + 1
+        } else {
+            byte
+        };
+
+        if byte == 0x03 && crate::kernel::syscall::interrupt_foreground_process() {
+            return;
+        }
+
         let enq = input::enqueue(byte);
         if enq {
             IRQ_COUNTER.fetch_add(1, Ordering::SeqCst);

@@ -115,17 +115,6 @@ pub extern "C" fn _start() -> ! {
     drivers::serial::write_str("Rootleaf: CPU features detected\n");
     drivers::keyboard::init();
     drivers::serial::write_str("Rootleaf: keyboard initialized\n");
-    match crate::fs::fat32::mount_first_ata() {
-        Ok(()) => {
-            drivers::serial::write_str("Rootleaf: auto-mounted \\DISK1 as /disk1\n");
-        }
-
-        Err(message) => {
-            drivers::serial::write_str("Rootleaf: auto-mount failed: ");
-            drivers::serial::write_str(message);
-            drivers::serial::write_str("\n");
-        }
-    }
 
     drivers::serial::write_str("Rootleaf: FAT32 mounted state = ");
     if crate::fs::fat32::is_mounted() {
@@ -133,6 +122,15 @@ pub extern "C" fn _start() -> ! {
     } else {
         drivers::serial::write_str("false\n");
     }
+
+    // Mount default filesystems
+    crate::drivers::serial::write_str("Rootleaf: mounting default filesystems\n");
+    // ramfs at /ram
+    let _ = crate::fs::vfs::mount("ram", crate::fs::vfs::VfsBackend::Ramfs);
+    // devfs at /dev
+    let _ = crate::fs::vfs::mount("dev", crate::fs::vfs::VfsBackend::Dev);
+    // procfs at /proc
+    let _ = crate::fs::vfs::mount("proc", crate::fs::vfs::VfsBackend::Proc);
 
     /*
         Scheduler init ONCE.

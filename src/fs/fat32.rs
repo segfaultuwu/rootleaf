@@ -6,7 +6,7 @@ static mut FILE_READ_BUFFER: [u8; FILE_READ_BUFFER_SIZE] = [0u8; FILE_READ_BUFFE
 #[derive(Clone, Copy)]
 enum MountedDisk {
     Memory(&'static [u8]),
-    Ata { sectors: u32 },
+    Ata { sectors: u32, start_lba: u32 },
 }
 
 static mut MOUNTED: Option<MountedDisk> = None;
@@ -51,8 +51,34 @@ pub fn mount_first_ata() -> Result<(), &'static str> {
         _ => return Err("No ATA disk found"),
     };
 
+    // Try to detect an MBR partition table and mount first partition if present
+    let mut start_lba: u32 = 0;
+    let mut part_sectors: u32 = sectors;
+
+    let mut sec0 = [0u8; 512];
+    if crate::drivers::ata::read_first_sector(0, &mut sec0).is_ok() {
+        // Check MBR signature 0x55AA at 510..511
+        if sec0[510] == 0x55 && sec0[511] == 0xAA {
+            // partition entry 1 at offset 446
+            let p_off = 446;
+            let p_start = (sec0[p_off + 8] as u32)
+                | ((sec0[p_off + 9] as u32) << 8)
+                | ((sec0[p_off + 10] as u32) << 16)
+                | ((sec0[p_off + 11] as u32) << 24);
+            let p_len = (sec0[p_off + 12] as u32)
+                | ((sec0[p_off + 13] as u32) << 8)
+                | ((sec0[p_off + 14] as u32) << 16)
+                | ((sec0[p_off + 15] as u32) << 24);
+
+            if p_start != 0 && p_len != 0 {
+                start_lba = p_start;
+                part_sectors = p_len;
+            }
+        }
+    }
+
     unsafe {
-        MOUNTED = Some(MountedDisk::Ata { sectors });
+        MOUNTED = Some(MountedDisk::Ata { sectors: part_sectors, start_lba });
     }
 
     Ok(())
@@ -82,7 +108,7 @@ fn mounted_disk() -> Option<MountedDisk> {
 fn mounted_len_bytes() -> Option<usize> {
     match mounted_disk()? {
         MountedDisk::Memory(data) => Some(data.len()),
-        MountedDisk::Ata { sectors } => Some((sectors as usize).saturating_mul(512)),
+        MountedDisk::Ata { sectors, .. } => Some((sectors as usize).saturating_mul(512)),
     }
 }
 
@@ -105,12 +131,11 @@ fn read_bytes(offset: usize, out: &mut [u8]) -> bool {
             out.copy_from_slice(&data[offset..offset + out.len()]);
             true
         }
-        Some(MountedDisk::Ata { .. }) => {
+        Some(MountedDisk::Ata { sectors, start_lba }) => {
             let mut done = 0usize;
-
             while done < out.len() {
                 let abs = offset + done;
-                let lba = (abs / 512) as u32;
+                let lba = (abs / 512) as u32 + start_lba;
                 let sector_off = abs % 512;
 
                 let mut sector = [0u8; 512];

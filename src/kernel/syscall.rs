@@ -1,5 +1,5 @@
 use core::cell::UnsafeCell;
-use core::sync::atomic::{AtomicBool, AtomicIsize, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicIsize, AtomicUsize, Ordering};
 
 pub const SYS_READ: usize = 0;
 pub const SYS_WRITE: usize = 1;
@@ -31,6 +31,7 @@ const SEEK_END: usize = 2;
 
 static EXITED: AtomicBool = AtomicBool::new(false);
 static EXIT_CODE: AtomicIsize = AtomicIsize::new(0);
+static FOREGROUND_TASK: AtomicUsize = AtomicUsize::new(0);
 
 #[derive(Clone, Copy)]
 struct FileDesc {
@@ -75,6 +76,30 @@ pub fn take_exit_code() -> Option<isize> {
     } else {
         None
     }
+}
+
+pub fn set_foreground_task(id: usize) {
+    FOREGROUND_TASK.store(id, Ordering::SeqCst);
+}
+
+pub fn interrupt_foreground_process() -> bool {
+    let tid = FOREGROUND_TASK.swap(0, Ordering::SeqCst);
+    if tid == 0 {
+        return false;
+    }
+
+    EXIT_CODE.store(130, Ordering::SeqCst);
+    EXITED.store(true, Ordering::SeqCst);
+
+    crate::drivers::serial::write_str("ELF: process interrupted with code 130\n");
+
+    if crate::scheduler::current_task_id() == tid {
+        crate::scheduler::exit_current_task();
+    } else {
+        let _ = crate::scheduler::kill_task_by_id(tid);
+    }
+
+    true
 }
 
 #[unsafe(no_mangle)]

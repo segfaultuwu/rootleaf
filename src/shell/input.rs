@@ -4,6 +4,13 @@ use crate::shell::tabs::{show_disks_tab, show_help_tab, show_mem_tab};
 
 pub fn handle_input_byte(byte: u8, line: &mut [u8; 128], line_len: &mut usize) {
     match byte {
+        0x03 => {
+            *line_len = 0;
+            clear_line_buffer(line);
+            crate::kernel::write_raw("^C\n");
+            crate::kernel::prompt();
+        }
+
         crate::kernel::input::KEY_F1 => {
             *line_len = 0;
             clear_line_buffer(line);

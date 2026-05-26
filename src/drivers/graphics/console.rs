@@ -302,7 +302,7 @@ impl ConsoleDriver {
     pub fn prompt(&mut self) {
         self.write_colored(crate::fs::cwd::get(), ConsoleColor::LIGHT_GREEN, ConsoleColor::BLACK);
 
-        self.write_colored(">", ConsoleColor::LIGHT_GREEN, ConsoleColor::BLACK);
+        self.write_colored(" % ", ConsoleColor::LIGHT_GREEN, ConsoleColor::BLACK);
 
         self.write_byte(b' ');
     }

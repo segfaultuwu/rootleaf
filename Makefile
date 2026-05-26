@@ -32,8 +32,9 @@ check-tools:
 	@command -v make >/dev/null || { echo "make not found"; exit 1; }
 	@command -v dd >/dev/null || { echo "dd not found"; exit 1; }
 	@command -v mcopy >/dev/null || { echo "mcopy not found; install mtools"; exit 1; }
-	@if ! command -v mkfs.fat >/dev/null && ! command -v mkfs.vfat >/dev/null; then \
-		echo "mkfs.fat/mkfs.vfat not found; install dosfstools"; \
+	# need a tool to create ext2/3 images or genext2fs to populate from a directory
+	@if ! command -v genext2fs >/dev/null && ! command -v mke2fs >/dev/null; then \
+		echo "genext2fs or mke2fs not found; install genext2fs or e2fsprogs"; \
 		exit 1; \
 	fi
 	@command -v $(QEMU) >/dev/null || { echo "qemu-system-x86_64 not found"; exit 1; }
@@ -85,7 +86,7 @@ $(DISK_DIR):
 
 $(DISK_DIR)/README.TXT: | $(DISK_DIR)
 	printf "Rootleaf QEMU disk\n" > $(DISK_DIR)/README.TXT
-	printf "This is a FAT32 image attached as a second drive.\n" >> $(DISK_DIR)/README.TXT
+	printf "This is an ext3 image attached as a second drive.\n" >> $(DISK_DIR)/README.TXT
 	printf "Mounted path inside Rootleaf: /disk1\n" >> $(DISK_DIR)/README.TXT
 
 $(DISK_DIR)/NOTES.TXT: | $(DISK_DIR)
@@ -113,16 +114,11 @@ disk: kernel $(DISK_DIR)/README.TXT $(DISK_DIR)/NOTES.TXT $(USER_ELF_BIN)
 	rm -f $(DISK_IMG)
 	dd if=/dev/zero of=$(DISK_IMG) bs=1M count=$(DISK_MB) status=none
 
-	@if command -v mkfs.fat >/dev/null; then \
-		mkfs.fat -F 32 $(DISK_IMG) >/dev/null; \
-	else \
-		mkfs.vfat -F 32 $(DISK_IMG) >/dev/null; \
-	fi
-
-	mcopy -i $(DISK_IMG) -s $(DISK_DIR)/* ::/
+	# Create ext3 image and populate it. Prefer genext2fs (no root required).
+	@if command -v genext2fs >/dev/null; then genext2fs -b $(DISK_MB)M -d $(DISK_DIR) $(DISK_IMG); else mke2fs -q -t ext3 $(DISK_IMG) >/dev/null; if command -v e2cp >/dev/null; then for f in $(DISK_DIR)/*; do e2cp -P -r $$f $(DISK_IMG):/; done; else echo "Created ext3 image but could not populate files; install genext2fs or e2tools (e2cp) to copy files without root"; fi; fi
 
 inspect: disk
-	mdir -i $(DISK_IMG) ::/
+	@command -v debugfs >/dev/null && debugfs -R "ls -p /" $(DISK_IMG) || echo "Install debugfs (e2fsprogs) to inspect ext3 images"
 
 run: iso disk
 	$(QEMU) \

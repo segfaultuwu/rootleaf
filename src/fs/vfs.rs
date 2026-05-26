@@ -1,3 +1,5 @@
+use core::cell::UnsafeCell;
+
 #[derive(Clone, Copy)]
 pub struct VfsFile {
     pub name: &'static str,
@@ -9,8 +11,10 @@ pub enum VfsBackend {
     Root,
     Ramfs,
     Fat32,
+    Isofs,
     Dev,
     Proc,
+    Ext2,
 }
 
 #[derive(Clone, Copy)]
@@ -31,18 +35,85 @@ pub enum VfsError {
 
 pub type VfsResult<T> = Result<T, VfsError>;
 
+const MAX_MOUNTS: usize = 8;
+const MAX_MOUNT_NAME: usize = 32;
+
+#[derive(Clone, Copy)]
+struct MountEntry {
+    used: bool,
+    name: [u8; MAX_MOUNT_NAME],
+    len: usize,
+    backend: VfsBackend,
+}
+
+impl MountEntry {
+    const fn empty() -> Self {
+        Self {
+            used: false,
+            name: [0; MAX_MOUNT_NAME],
+            len: 0,
+            backend: VfsBackend::Ramfs,
+        }
+    }
+}
+
+struct MountTable(UnsafeCell<[MountEntry; MAX_MOUNTS]>);
+unsafe impl Sync for MountTable {}
+
+static MOUNTS: MountTable = MountTable(UnsafeCell::new([MountEntry::empty(); MAX_MOUNTS]));
+
+pub fn mount(name: &str, backend: VfsBackend) -> bool {
+    let name = normalize_path(name);
+    if name.is_empty() || name.len() >= MAX_MOUNT_NAME {
+        return false;
+    }
+
+    unsafe {
+        let mounts = &mut *MOUNTS.0.get();
+
+        // Reject duplicates
+        for m in mounts.iter_mut() {
+            if m.used && eq_ascii_ignore_case_str(name, core::str::from_utf8(&m.name[..m.len]).unwrap_or("")) {
+                m.backend = backend;
+                return true;
+            }
+        }
+
+        for m in mounts.iter_mut() {
+            if !m.used {
+                m.used = true;
+                m.len = name.len();
+                for (i, &b) in name.as_bytes().iter().enumerate() {
+                    m.name[i] = b;
+                }
+                m.backend = backend;
+                return true;
+            }
+        }
+    }
+
+    false
+}
+
+pub fn unmount(name: &str) -> bool {
+    let name = normalize_path(name);
+    unsafe {
+        let mounts = &mut *MOUNTS.0.get();
+        for m in mounts.iter_mut() {
+            if m.used && eq_ascii_ignore_case_str(name, core::str::from_utf8(&m.name[..m.len]).unwrap_or("")) {
+                m.used = false;
+                m.len = 0;
+                return true;
+            }
+        }
+    }
+
+    false
+}
+
 pub fn parse_path(path: &str) -> VfsResult<VfsPath<'_>> {
     if path.is_empty() {
         return Err(VfsError::InvalidPath);
-    }
-
-    /*
-        Legacy compatibility:
-            0:\FILE -> /ram/FILE
-            1:\FILE -> /disk1/FILE
-    */
-    if is_legacy_path(path) {
-        return parse_legacy_path(path);
     }
 
     if path == "/" {
@@ -57,6 +128,27 @@ pub fn parse_path(path: &str) -> VfsResult<VfsPath<'_>> {
     }
 
     let path = normalize_path(path);
+
+    // Check dynamic mounts first
+    unsafe {
+        let mounts = &*MOUNTS.0.get();
+        // exact match
+        for m in mounts.iter() {
+            if !m.used { continue; }
+            let mname = core::str::from_utf8(&m.name[..m.len]).unwrap_or("");
+            if eq_ascii_ignore_case_str(path, mname) {
+                return Ok(VfsPath { backend: m.backend, path: "" });
+            }
+        }
+        // prefix match
+        for m in mounts.iter() {
+            if !m.used { continue; }
+            let mname = core::str::from_utf8(&m.name[..m.len]).unwrap_or("");
+            if starts_with_mount(path, mname) {
+                return Ok(VfsPath { backend: m.backend, path: &path[mname.len()+1..] });
+            }
+        }
+    }
 
     if path.is_empty() {
         return Ok(VfsPath {
@@ -131,44 +223,6 @@ pub fn parse_path(path: &str) -> VfsResult<VfsPath<'_>> {
     })
 }
 
-fn is_legacy_path(path: &str) -> bool {
-    let bytes = path.as_bytes();
-
-    bytes.len() >= 2 && bytes[1] == b':'
-}
-
-fn parse_legacy_path(path: &str) -> VfsResult<VfsPath<'_>> {
-    let bytes = path.as_bytes();
-
-    if bytes.len() < 2 || bytes[1] != b':' {
-        return Err(VfsError::InvalidPath);
-    }
-
-    let mut rest = if bytes.len() > 2 {
-        &path[2..]
-    } else {
-        ""
-    };
-
-    while rest.starts_with('\\') || rest.starts_with('/') {
-        rest = &rest[1..];
-    }
-
-    match bytes[0] {
-        b'0' => Ok(VfsPath {
-            backend: VfsBackend::Ramfs,
-            path: rest,
-        }),
-
-        b'1' => Ok(VfsPath {
-            backend: VfsBackend::Fat32,
-            path: rest,
-        }),
-
-        _ => Err(VfsError::InvalidDisk),
-    }
-}
-
 pub fn normalize_path(path: &str) -> &str {
     let mut p = path;
 
@@ -180,6 +234,12 @@ pub fn normalize_path(path: &str) -> &str {
 }
 
 pub fn read(path: &str) -> VfsResult<&'static [u8]> {
+    // special-case /etc/mtab to expose the current mount table
+    let norm = normalize_path(path);
+    if norm == "etc/mtab" {
+        return Ok(build_mtab());
+    }
+
     let parsed = parse_path(path)?;
 
     match parsed.backend {
@@ -230,6 +290,27 @@ pub fn read(path: &str) -> VfsResult<&'static [u8]> {
                 }
             }
         }
+        VfsBackend::Isofs => {
+            let relative = normalize_path(parsed.path);
+
+            if relative.is_empty() {
+                return Err(VfsError::InvalidPath);
+            }
+
+            crate::fs::isofs::read_file(relative)
+        }
+        VfsBackend::Ext2 => {
+            let relative = normalize_path(parsed.path);
+
+            if relative.is_empty() {
+                return Err(VfsError::InvalidPath);
+            }
+
+            match crate::fs::ext2::read_file(relative) {
+                Ok(data) => Ok(data),
+                Err(e) => Err(e),
+            }
+        }
 
         VfsBackend::Dev => read_dev(parsed.path),
 
@@ -252,11 +333,10 @@ pub fn write(path: &str, data: &[u8]) -> VfsResult<()> {
                 Err(VfsError::WriteFailed)
             }
         }
-
-        /*
-            FAT32 write is disabled until your FAT32 write path is stable.
-        */
+        
         VfsBackend::Fat32 => Err(VfsError::WriteFailed),
+        VfsBackend::Isofs => Err(VfsError::WriteFailed),
+        VfsBackend::Ext2 => Err(VfsError::WriteFailed),
 
         VfsBackend::Dev => Err(VfsError::Unsupported),
 
@@ -281,7 +361,8 @@ pub fn delete(path: &str) -> VfsResult<()> {
         }
 
         VfsBackend::Fat32 => Err(VfsError::WriteFailed),
-
+        VfsBackend::Isofs => Err(VfsError::Unsupported),
+        VfsBackend::Ext2 => Err(VfsError::Unsupported),
         VfsBackend::Dev => Err(VfsError::Unsupported),
 
         VfsBackend::Proc => Err(VfsError::Unsupported),
@@ -297,8 +378,84 @@ pub fn disk_name(backend: VfsBackend) -> &'static str {
         VfsBackend::Root => "rootfs",
         VfsBackend::Ramfs => "ramfs",
         VfsBackend::Fat32 => "fat32",
+        VfsBackend::Isofs => "isofs",
         VfsBackend::Dev => "devfs",
         VfsBackend::Proc => "procfs",
+        VfsBackend::Ext2 => "ext2",
+    }
+}
+
+fn mount_device_prefix(backend: VfsBackend) -> &'static str {
+    match backend {
+        VfsBackend::Isofs => "cdrom",
+        VfsBackend::Root => "root",
+        VfsBackend::Dev => "dev",
+        VfsBackend::Proc => "proc",
+        VfsBackend::Ramfs => "loop",
+        VfsBackend::Fat32 => "loop",
+        VfsBackend::Ext2 => "loop",
+    }
+}
+
+pub fn build_dev_list() -> &'static [u8] {
+    static mut BUF: [u8; 512] = [0; 512];
+
+    unsafe {
+        let buf_ptr = (&raw mut BUF) as *mut [u8; 512] as *mut u8;
+        let mut len = 0usize;
+
+        // Always include a few virtual devices
+        write_str(buf_ptr, 512, &mut len, "null\n");
+        write_str(buf_ptr, 512, &mut len, "zero\n");
+        write_str(buf_ptr, 512, &mut len, "console\n");
+        write_str(buf_ptr, 512, &mut len, "tty\n");
+        write_str(buf_ptr, 512, &mut len, "keyboard\n");
+
+        // For each active mount entry, assign a synthetic block device name.
+        // ISO9660 mounts are presented as CD-ROMs; everything else is loopback-backed.
+        let mounts = &*MOUNTS.0.get();
+        let mut mount_index = 0usize;
+        for m in mounts.iter() {
+            if !m.used { continue; }
+            if matches!(m.backend, VfsBackend::Dev | VfsBackend::Proc | VfsBackend::Root) {
+                continue;
+            }
+
+            write_str(buf_ptr, 512, &mut len, mount_device_prefix(m.backend));
+            write_u64(buf_ptr, 512, &mut len, mount_index as u64);
+            if len < 512 { core::ptr::write(buf_ptr.add(len), b'\n'); len += 1; }
+
+            write_str(buf_ptr, 512, &mut len, mount_device_prefix(m.backend));
+            write_u64(buf_ptr, 512, &mut len, mount_index as u64);
+            write_str(buf_ptr, 512, &mut len, "p1");
+            if len < 512 { core::ptr::write(buf_ptr.add(len), b'\n'); len += 1; }
+
+            mount_index += 1;
+        }
+
+        // Detect physical disks and append unmounted disks if needed
+        let st = crate::drivers::pci::scan_storage();
+        let ata = crate::drivers::pci::scan_legacy_ata();
+        let detected = st.total() + ata.ata_devices;
+
+        let mut disk_index = 0usize;
+        while disk_index < detected && disk_index < 26 {
+            let letter = b'a' + (disk_index as u8);
+            let nameb = [b's', b'd', letter];
+            let s = core::str::from_utf8(&nameb).unwrap_or("sd?");
+            write_str(buf_ptr, 512, &mut len, s);
+            if len < 512 { core::ptr::write(buf_ptr.add(len), b'\n'); len += 1; }
+
+            let partb = [b's', b'd', letter, b'1'];
+            let ps = core::str::from_utf8(&partb).unwrap_or("sd?1");
+            write_str(buf_ptr, 512, &mut len, ps);
+            if len < 512 { core::ptr::write(buf_ptr.add(len), b'\n'); len += 1; }
+
+            disk_index += 1;
+        }
+
+
+        core::slice::from_raw_parts(buf_ptr as *const u8, len)
     }
 }
 
@@ -315,28 +472,242 @@ pub fn error_str(error: VfsError) -> &'static str {
 
 fn read_dev(path: &str) -> VfsResult<&'static [u8]> {
     match normalize_path(path) {
-        "" => Err(VfsError::Unsupported),
+        "" => Ok(build_dev_list()),
         "null" => Ok(b""),
         "zero" => Ok(b"\0\0\0\0\0\0\0\0"),
-        "console" => Ok(b"Rootleaf framebuffer console\n"),
+        "console" | "tty" => Ok(b"Rootleaf framebuffer console\n"),
         "keyboard" => Ok(b"PS/2 keyboard\n"),
+            p if p.starts_with("cdrom") => Ok(b"CD-ROM drive (virtual)\n"),
+        p if p.starts_with("sd") => {
+            // simple device info for sd* and sd*n
+            Ok(b"SCSI disk\n")
+        }
         _ => Err(VfsError::NotFound),
     }
 }
 
 fn read_proc(path: &str) -> VfsResult<&'static [u8]> {
+    static mut PROC_BUF: [u8; 512] = [0; 512];
+
     match normalize_path(path) {
         "" => Err(VfsError::Unsupported),
-        "version" => Ok(b"Rootleaf\n"),
-        "cpuinfo" => Ok(b"x86_64\n"),
+        "version" => Ok(concat_static(&[
+            b"Rootleaf ",
+            env!("CARGO_PKG_VERSION").as_bytes(),
+            b"\n",
+        ])),
+        "cpuinfo" => Ok(build_cpuinfo()),
+        "cwd" => Ok(build_cwd()),
+        "pid" => Ok(build_pid()),
+        "tasks" => Ok(build_tasks()),
         "mounts" => {
-            if crate::fs::fat32::is_mounted() {
-                Ok(b"rootfs /\nramfs /ram\nfat32 /disk1\n")
-            } else {
-                Ok(b"rootfs /\nramfs /ram\n")
-            }
+            Ok(build_mounts())
+        }
+        "meminfo" => Ok(build_meminfo()),
+        "self" => {
+            let pid = crate::scheduler::current_task_id();
+            let _ = pid;
+            Ok(build_self())
         }
         _ => Err(VfsError::NotFound),
+    }
+}
+
+fn concat_static(parts: &[&[u8]]) -> &'static [u8] {
+    static mut BUF: [u8; 128] = [0; 128];
+
+    unsafe {
+        let buf_ptr = (&raw mut BUF) as *mut [u8; 128] as *mut u8;
+        let mut len = 0usize;
+
+        for part in parts {
+            for &byte in *part {
+                if len >= 128 {
+                    return core::slice::from_raw_parts(buf_ptr as *const u8, len);
+                }
+
+                core::ptr::write(buf_ptr.add(len), byte);
+                len += 1;
+            }
+        }
+
+        core::slice::from_raw_parts(buf_ptr as *const u8, len)
+    }
+}
+
+fn write_str(out_ptr: *mut u8, max: usize, len: &mut usize, s: &str) {
+    for &byte in s.as_bytes() {
+        if *len >= max {
+            return;
+        }
+
+        unsafe { core::ptr::write(out_ptr.add(*len), byte) };
+        *len += 1;
+    }
+}
+
+fn write_u64(out_ptr: *mut u8, max: usize, len: &mut usize, value: u64) {
+    let mut num_buf = [0u8; 20];
+    let text = crate::lib::u64_to_str(value, &mut num_buf);
+    write_str(out_ptr, max, len, text);
+}
+
+fn build_cpuinfo() -> &'static [u8] {
+    static mut BUF: [u8; 256] = [0; 256];
+    unsafe {
+        let buf_ptr = (&raw mut BUF) as *mut [u8; 256] as *mut u8;
+        let mut len = 0usize;
+
+        write_str(buf_ptr, 256, &mut len, "processor\t: 0\n");
+        write_str(buf_ptr, 256, &mut len, "vendor_id\t: ");
+        write_str(buf_ptr, 256, &mut len, crate::arch::x86_64::cpu::get_cpu_vendor());
+        write_str(buf_ptr, 256, &mut len, "\nmodel name\t: x86_64\n");
+
+        core::slice::from_raw_parts(buf_ptr as *const u8, len)
+    }
+}
+
+fn build_cwd() -> &'static [u8] {
+    static mut BUF: [u8; 128] = [0; 128];
+    unsafe {
+        let cwd = crate::fs::cwd::get().as_bytes();
+        let buf_ptr = (&raw mut BUF) as *mut [u8; 128] as *mut u8;
+        let mut len = 0usize;
+
+        for &byte in cwd {
+            if len >= 128 {
+                break;
+            }
+            core::ptr::write(buf_ptr.add(len), byte);
+            len += 1;
+        }
+
+        if len < 128 {
+            core::ptr::write(buf_ptr.add(len), b'\n');
+            len += 1;
+        }
+
+        core::slice::from_raw_parts(buf_ptr as *const u8, len)
+    }
+}
+
+fn build_pid() -> &'static [u8] {
+    static mut BUF: [u8; 32] = [0; 32];
+    unsafe {
+        let buf_ptr = (&raw mut BUF) as *mut [u8; 32] as *mut u8;
+        let mut len = 0usize;
+
+        write_u64(buf_ptr, 32, &mut len, crate::scheduler::current_task_id() as u64);
+        if len < 32 {
+            core::ptr::write(buf_ptr.add(len), b'\n');
+            len += 1;
+        }
+
+        core::slice::from_raw_parts(buf_ptr as *const u8, len)
+    }
+}
+
+fn build_tasks() -> &'static [u8] {
+    static mut BUF: [u8; 32] = [0; 32];
+    unsafe {
+        let buf_ptr = (&raw mut BUF) as *mut [u8; 32] as *mut u8;
+        let mut len = 0usize;
+
+        write_u64(buf_ptr, 32, &mut len, crate::scheduler::task_count() as u64);
+        if len < 32 {
+            core::ptr::write(buf_ptr.add(len), b'\n');
+            len += 1;
+        }
+
+        core::slice::from_raw_parts(buf_ptr as *const u8, len)
+    }
+}
+
+fn build_mounts() -> &'static [u8] {
+    static mut BUF: [u8; 128] = [0; 128];
+    unsafe {
+        let buf_ptr = (&raw mut BUF) as *mut [u8; 128] as *mut u8;
+        let mut len = 0usize;
+
+        write_str(buf_ptr, 128, &mut len, "rootfs /\nramfs /ram\n");
+
+        if crate::fs::fat32::is_mounted() {
+            write_str(buf_ptr, 128, &mut len, "fat32 /disk1\n");
+        }
+
+        core::slice::from_raw_parts(buf_ptr as *const u8, len)
+    }
+}
+
+fn build_meminfo() -> &'static [u8] {
+    static mut BUF: [u8; 256] = [0; 256];
+    unsafe {
+        let buf_ptr = (&raw mut BUF) as *mut [u8; 256] as *mut u8;
+        let mut len = 0usize;
+        let info = crate::memory::info::memory_info();
+
+        write_str(buf_ptr, 256, &mut len, "MemTotal: ");
+        write_u64(buf_ptr, 256, &mut len, info.total_mib());
+        write_str(buf_ptr, 256, &mut len, " MiB\nMemFree:  ");
+        write_u64(buf_ptr, 256, &mut len, info.usable_mib());
+        write_str(buf_ptr, 256, &mut len, " MiB\nMemUsed:  ");
+        write_u64(
+            buf_ptr,
+            256,
+            &mut len,
+            info.total_mib().saturating_sub(info.usable_mib()),
+        );
+        write_str(buf_ptr, 256, &mut len, " MiB\n");
+
+        core::slice::from_raw_parts(buf_ptr as *const u8, len)
+    }
+}
+
+fn build_self() -> &'static [u8] {
+    static mut BUF: [u8; 32] = [0; 32];
+
+    unsafe {
+        let buf_ptr = (&raw mut BUF) as *mut [u8; 32] as *mut u8;
+        let mut len = 0usize;
+
+        write_str(buf_ptr, 32, &mut len, "self\n");
+        core::slice::from_raw_parts(buf_ptr as *const u8, len)
+    }
+}
+
+fn build_mtab() -> &'static [u8] {
+    static mut BUF: [u8; 512] = [0; 512];
+
+    unsafe {
+        let buf_ptr = (&raw mut BUF) as *mut [u8; 512] as *mut u8;
+        let mut len = 0usize;
+
+        let mounts = &*MOUNTS.0.get();
+        let mut mount_index = 0usize;
+        for m in mounts.iter() {
+            if !m.used { continue; }
+
+            let mname = core::str::from_utf8(&m.name[..m.len]).unwrap_or("");
+            write_str(buf_ptr, 512, &mut len, mount_device_prefix(m.backend));
+            write_u64(buf_ptr, 512, &mut len, mount_index as u64);
+            // Format similar to mtab: "<device> /<mount> <fstype> rw 0 0\n"
+            if len < 512 {
+                core::ptr::write(buf_ptr.add(len), b' ');
+                len += 1;
+            }
+            write_str(buf_ptr, 512, &mut len, "/");
+            write_str(buf_ptr, 512, &mut len, mname);
+            if len < 512 {
+                core::ptr::write(buf_ptr.add(len), b' ');
+                len += 1;
+            }
+            write_str(buf_ptr, 512, &mut len, disk_name(m.backend));
+            write_str(buf_ptr, 512, &mut len, " rw 0 0\n");
+
+            mount_index += 1;
+        }
+
+        core::slice::from_raw_parts(buf_ptr as *const u8, len)
     }
 }
 
