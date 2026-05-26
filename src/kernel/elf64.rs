@@ -11,9 +11,6 @@ const ET_DYN: u16 = 3;
 const EM_X86_64: u16 = 62;
 
 const PT_LOAD: u32 = 1;
-const ELF_ARENA_SIZE: usize = 16 * 1024 * 1024;
-
-static mut ELF_ARENA: [u8; ELF_ARENA_SIZE] = [0u8; ELF_ARENA_SIZE];
 
 #[repr(C)]
 #[derive(Clone, Copy)]
@@ -47,44 +44,28 @@ struct Elf64Phdr {
     p_align: u64,
 }
 
-#[derive(Clone, Copy)]
-struct LoadedSeg {
-    vaddr: u64,
-    memsz: u64,
-    host_base: *mut u8,
-}
-
-type UserEntry = extern "C" fn(usize) -> isize;
-
-fn align_up(value: usize, align: usize) -> Option<usize> {
-    if align == 0 {
-        return Some(value);
-    }
-
-    let mask = align - 1;
-    value.checked_add(mask).map(|v| v & !mask)
-}
-
-fn invoke_user_entry(entry: *const (), syscall_ptr: usize) -> isize {
-    let entry_fn: UserEntry = unsafe { core::mem::transmute(entry) };
-    entry_fn(syscall_ptr)
-}
-
 fn parse_header(data: &[u8]) -> Option<&Elf64Ehdr> {
     if data.len() < core::mem::size_of::<Elf64Ehdr>() {
         return None;
     }
 
-    let hdr = unsafe { &*(data.as_ptr() as *const Elf64Ehdr) };
+    let hdr = unsafe {
+        &*(data.as_ptr() as *const Elf64Ehdr)
+    };
 
     if &hdr.e_ident[0..4] != b"\x7fELF" {
         return None;
     }
 
-    if hdr.e_ident[EI_CLASS] != ELFCLASS64
-        || hdr.e_ident[EI_DATA] != ELFDATA2LSB
-        || hdr.e_ident[EI_VERSION] != EV_CURRENT
-    {
+    if hdr.e_ident[EI_CLASS] != ELFCLASS64 {
+        return None;
+    }
+
+    if hdr.e_ident[EI_DATA] != ELFDATA2LSB {
+        return None;
+    }
+
+    if hdr.e_ident[EI_VERSION] != EV_CURRENT {
         return None;
     }
 
@@ -103,109 +84,182 @@ fn parse_header(data: &[u8]) -> Option<&Elf64Ehdr> {
     Some(hdr)
 }
 
-pub fn run(data: &[u8]) -> Result<isize, &'static str> {
-    crate::drivers::serial::write_str("ELF: run begin\n");
-    let hdr = parse_header(data).ok_or("Invalid ELF64 header")?;
-    crate::drivers::serial::write_str("ELF: header parsed\n");
+fn phdr_at(data: &[u8], phoff: usize, index: usize) -> Option<&Elf64Phdr> {
+    let phsz = core::mem::size_of::<Elf64Phdr>();
+    let off = phoff.checked_add(index.checked_mul(phsz)?)?;
 
+    if off.checked_add(phsz)? > data.len() {
+        return None;
+    }
+
+    Some(unsafe {
+        &*(data.as_ptr().add(off) as *const Elf64Phdr)
+    })
+}
+
+fn validate_phdr_table(data: &[u8], hdr: &Elf64Ehdr) -> Result<(), &'static str> {
     let phoff = hdr.e_phoff as usize;
     let phnum = hdr.e_phnum as usize;
     let phsz = core::mem::size_of::<Elf64Phdr>();
 
-    if phoff.checked_add(phnum * phsz).is_none() || phoff + phnum * phsz > data.len() {
+    let table_size = phnum
+        .checked_mul(phsz)
+        .ok_or("ELF program header table overflow")?;
+
+    let table_end = phoff
+        .checked_add(table_size)
+        .ok_or("ELF program header table overflow")?;
+
+    if table_end > data.len() {
         return Err("ELF program headers out of range");
     }
-    crate::drivers::serial::write_str("ELF: program headers range ok\n");
 
-    let mut segs = [LoadedSeg {
-        vaddr: 0,
-        memsz: 0,
-        host_base: core::ptr::null_mut(),
-    }; 16];
-    let mut seg_count = 0usize;
-    let mut arena_used = 0usize;
+    Ok(())
+}
+
+fn load_segment(data: &[u8], ph: &Elf64Phdr) -> Result<(), &'static str> {
+    if ph.p_memsz == 0 {
+        return Ok(());
+    }
+
+    if ph.p_filesz > ph.p_memsz {
+        return Err("ELF segment filesz > memsz");
+    }
+
+    if ph.p_vaddr == 0 {
+        return Err("ELF segment has null vaddr");
+    }
+
+    let file_off = ph.p_offset as usize;
+    let file_sz = ph.p_filesz as usize;
+    let mem_sz = ph.p_memsz as usize;
+    let vaddr = ph.p_vaddr as usize;
+
+    let file_end = file_off
+        .checked_add(file_sz)
+        .ok_or("ELF segment file range overflow")?;
+
+    if file_end > data.len() {
+        return Err("ELF segment file range out of bounds");
+    }
+
+    let mem_end = vaddr
+        .checked_add(mem_sz)
+        .ok_or("ELF segment memory range overflow")?;
+
+    crate::drivers::serial::write_str("ELF: PT_LOAD vaddr=");
+    crate::drivers::serial::write_hex(vaddr);
+    crate::drivers::serial::write_str(" end=");
+    crate::drivers::serial::write_hex(mem_end);
+    crate::drivers::serial::write_str(" offset=");
+    crate::drivers::serial::write_hex(file_off);
+    crate::drivers::serial::write_str(" filesz=");
+    crate::drivers::serial::write_hex(file_sz);
+    crate::drivers::serial::write_str(" memsz=");
+    crate::drivers::serial::write_hex(mem_sz);
+    crate::drivers::serial::write_str(" flags=");
+    crate::drivers::serial::write_hex(ph.p_flags as usize);
+    crate::drivers::serial::write_str("\n");
+
+    let src = &data[file_off..file_end];
+    let dst = vaddr as *mut u8;
+
+    unsafe {
+        core::ptr::copy_nonoverlapping(
+            src.as_ptr(),
+            dst,
+            file_sz,
+        );
+
+        if mem_sz > file_sz {
+            core::ptr::write_bytes(
+                dst.add(file_sz),
+                0,
+                mem_sz - file_sz,
+            );
+        }
+    }
+
+    Ok(())
+}
+
+fn entry_in_load_segment(data: &[u8], hdr: &Elf64Ehdr) -> Result<bool, &'static str> {
+    let phoff = hdr.e_phoff as usize;
+    let phnum = hdr.e_phnum as usize;
+    let entry = hdr.e_entry;
 
     for i in 0..phnum {
-        let off = phoff + i * phsz;
-        let ph = unsafe { &*(data.as_ptr().add(off) as *const Elf64Phdr) };
+        let ph = phdr_at(data, phoff, i).ok_or("Invalid program header")?;
 
-        if ph.p_type != PT_LOAD || ph.p_memsz == 0 {
+        if ph.p_type != PT_LOAD {
             continue;
         }
 
-        if seg_count >= segs.len() {
-            return Err("Too many PT_LOAD segments");
+        let start = ph.p_vaddr;
+        let end = ph
+            .p_vaddr
+            .checked_add(ph.p_memsz)
+            .ok_or("ELF segment range overflow")?;
+
+        if entry >= start && entry < end {
+            return Ok(true);
+        }
+    }
+
+    Ok(false)
+}
+
+pub fn run(data: &[u8]) -> Result<isize, &'static str> {
+    crate::drivers::serial::write_str("ELF: run begin\n");
+
+    let hdr = parse_header(data).ok_or("Invalid ELF64 header")?;
+
+    crate::drivers::serial::write_str("ELF: header parsed\n");
+
+    if hdr.e_type == ET_DYN {
+        crate::drivers::serial::write_str("ELF: warning: ET_DYN loaded without relocations\n");
+    }
+
+    validate_phdr_table(data, hdr)?;
+
+    crate::drivers::serial::write_str("ELF: program headers range ok\n");
+
+    if !entry_in_load_segment(data, hdr)? {
+        return Err("Entry not in PT_LOAD segment");
+    }
+
+    let phoff = hdr.e_phoff as usize;
+    let phnum = hdr.e_phnum as usize;
+
+    let mut load_count = 0usize;
+
+    for i in 0..phnum {
+        let ph = phdr_at(data, phoff, i).ok_or("Invalid program header")?;
+
+        if ph.p_type != PT_LOAD {
+            continue;
         }
 
-        let file_off = ph.p_offset as usize;
-        let file_sz = ph.p_filesz as usize;
-        let mem_sz = ph.p_memsz as usize;
+        load_segment(data, ph)?;
+        load_count += 1;
+    }
 
-        if file_sz > mem_sz {
-            return Err("Segment filesz > memsz");
-        }
-
-        if file_off.checked_add(file_sz).is_none() || file_off + file_sz > data.len() {
-            return Err("Segment file range out of bounds");
-        }
-
-        let seg_align = if ph.p_align > 0 {
-            (ph.p_align as usize).checked_next_power_of_two().unwrap_or(16)
-        } else {
-            16
-        };
-
-        let aligned = align_up(arena_used, seg_align).ok_or("ELF arena overflow")?;
-        let seg_end = aligned
-            .checked_add(mem_sz)
-            .ok_or("ELF arena overflow")?;
-
-        if seg_end > ELF_ARENA_SIZE {
-            return Err("Out of memory while loading ELF");
-        }
-
-        let dst = unsafe { &mut ELF_ARENA[aligned..seg_end] };
-
-        dst[..file_sz].copy_from_slice(&data[file_off..file_off + file_sz]);
-        if mem_sz > file_sz {
-            for b in &mut dst[file_sz..mem_sz] {
-                *b = 0;
-            }
-        }
-
-        segs[seg_count] = LoadedSeg {
-            vaddr: ph.p_vaddr,
-            memsz: ph.p_memsz,
-            host_base: dst.as_mut_ptr(),
-        };
-        seg_count += 1;
-        arena_used = seg_end;
+    if load_count == 0 {
+        return Err("No loadable segments");
     }
 
     crate::drivers::serial::write_str("ELF: segments loaded\n");
 
-    if seg_count == 0 {
-        return Err("No loadable segments");
-    }
+    let entry = hdr.e_entry as usize;
 
-    let entry = hdr.e_entry;
-    let mut host_entry: Option<*mut u8> = None;
-
-    for seg in &segs[..seg_count] {
-        if entry >= seg.vaddr && entry < seg.vaddr + seg.memsz {
-            let delta = (entry - seg.vaddr) as usize;
-            host_entry = Some(unsafe { seg.host_base.add(delta) });
-            break;
-        }
-    }
-
-    let host_entry = host_entry.ok_or("Entry not in PT_LOAD segment")?;
-    crate::drivers::serial::write_str("ELF: host entry resolved\n");
+    crate::drivers::serial::write_str("ELF: entry=");
+    crate::drivers::serial::write_hex(entry);
+    crate::drivers::serial::write_str("\n");
 
     crate::kernel::syscall::reset_process_state();
 
     match crate::scheduler::spawn(
-        host_entry as usize,
+        entry,
         crate::kernel::syscall::linux_syscall as usize,
     ) {
         Ok(_tid) => {
@@ -220,6 +274,7 @@ pub fn run(data: &[u8]) -> Result<isize, &'static str> {
                 crate::scheduler::yield_now();
             }
         }
+
         Err(_) => Err("Failed to spawn task"),
     }
 }

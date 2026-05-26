@@ -1,0 +1,7 @@
+[build]
+target = "x86_64-rootleaf.json"
+
+[target.x86_64-rootleaf]
+rustflags = [
+    "-C", "link-arg=-Tlinker.ld",
+]

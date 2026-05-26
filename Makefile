@@ -4,11 +4,14 @@ LIMINE_DIR := limine
 DISK_IMG := rootleaf_disk.img
 DISK_MB := 64
 DISK_DIR := disk_files
-USER_ELF_SRC := $(DISK_DIR)/hello.S
-USER_ELF_OBJ := $(DISK_DIR)/hello.o
+
+USERLAND_DIR := userland
+USER_INIT_DIR := $(USERLAND_DIR)/init
+USER_TARGET := $(USER_INIT_DIR)/x86_64-rootleaf.json
+USER_ELF_BUILT := $(USER_INIT_DIR)/target/x86_64-rootleaf/debug/init
 USER_ELF_BIN := $(DISK_DIR)/APP.ELF
 
-.PHONY: all kernel limine iso disk run clean
+.PHONY: all kernel limine iso disk userland run clean
 
 all: iso disk
 
@@ -57,14 +60,11 @@ $(DISK_DIR)/NOTES.TXT: | $(DISK_DIR)
 	printf "  ELF 1:\\APP.ELF\n" >> $(DISK_DIR)/NOTES.TXT
 	printf "  TYPE 1:\\README.TXT\n" >> $(DISK_DIR)/NOTES.TXT
 
-$(USER_ELF_BIN): $(USER_ELF_SRC) | $(DISK_DIR)
-	@if command -v as >/dev/null && command -v ld >/dev/null; then \
-		as --64 -o $(USER_ELF_OBJ) $(USER_ELF_SRC); \
-		ld -nostdlib -static -e _start -o $(USER_ELF_BIN) $(USER_ELF_OBJ); \
-	else \
-		echo "as/ld not found, using kernel ELF as placeholder APP.ELF"; \
-		cp $(KERNEL) $(USER_ELF_BIN); \
-	fi
+userland:
+	cd $(USER_INIT_DIR) && cargo +nightly build -Z build-std=core -Z json-target-spec --target x86_64-rootleaf.json
+
+$(USER_ELF_BIN): userland | $(DISK_DIR)
+	cp $(USER_ELF_BUILT) $(USER_ELF_BIN)
 
 disk: kernel $(DISK_DIR)/README.TXT $(DISK_DIR)/NOTES.TXT $(USER_ELF_BIN)
 	rm -f $(DISK_IMG)
@@ -95,4 +95,5 @@ run: iso disk
 		-no-shutdown
 
 clean:
-	rm -rf target iso_root/boot/kernel.elf $(ISO) $(DISK_IMG) $(USER_ELF_OBJ) $(USER_ELF_BIN)
+	rm -rf target iso_root/boot/kernel.elf $(ISO) $(DISK_IMG) $(USER_ELF_BIN)
+	rm -rf $(USER_INIT_DIR)/target

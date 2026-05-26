@@ -69,14 +69,40 @@ fn sys_exit(code: isize) -> ! {
 }
 
 fn sys_write(fd: usize, buf: *const u8, len: usize) -> isize {
-    if (fd != 1 && fd != 2) || buf.is_null() {
+    crate::drivers::serial::write_str("ELF: sys_write fd=");
+    crate::drivers::serial::write_hex(fd);
+    crate::drivers::serial::write_str(" buf=");
+    crate::drivers::serial::write_hex(buf as usize);
+    crate::drivers::serial::write_str(" len=");
+    crate::drivers::serial::write_hex(len);
+    crate::drivers::serial::write_str("\n");
+
+    if fd != 1 && fd != 2 {
         return EINVAL;
     }
 
-    let s = unsafe { core::slice::from_raw_parts(buf, len) };
-    for &b in s {
+    if buf.is_null() {
+        return EINVAL;
+    }
+
+    if len > 4096 {
+        return EINVAL;
+    }
+
+    for i in 0..len {
+        let b = unsafe {
+            core::ptr::read_volatile(buf.add(i))
+        };
+
+        // serial output
+        crate::drivers::serial::write_byte(b);
+
+        // framebuffer console output
         crate::kernel::write_byte(b);
     }
+
+    crate::kernel::present();
+
     len as isize
 }
 
