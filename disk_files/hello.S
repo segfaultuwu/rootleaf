@@ -2,15 +2,17 @@
 .global _start
 .section .text
 _start:
-    mov r12, rdi
+    mov r11, rdi
+    sub rsp, 8
 
     mov rdi, 1
     mov rsi, 1
     lea rdx, [rip + msg]
-    mov rcx, msg_len
+    lea rcx, [rip + msg_end]
+    sub rcx, rdx
     xor r8, r8
     xor r9, r9
-    call r12
+    call r11
 
     mov rdi, 60
     xor rsi, rsi
@@ -18,11 +20,12 @@ _start:
     xor rcx, rcx
     xor r8, r8
     xor r9, r9
-    call r12
+    call r11
 
+    add rsp, 8
     ret
 
 .section .rodata
 msg:
     .ascii "Hello, World!\n"
-    .set msg_len, . - msg
+msg_end:

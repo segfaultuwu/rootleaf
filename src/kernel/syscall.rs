@@ -1,32 +1,4 @@
 use core::sync::atomic::{AtomicBool, AtomicIsize, Ordering};
-use core::arch::global_asm;
-
-global_asm!(
-    r#"
-    .global linux_syscall_entry
-linux_syscall_entry:
-    mov r10, rdi
-    mov r11, rsi
-    mov r8, rdx
-
-    mov rdi, rax
-    mov rsi, r10
-    mov rdx, r11
-    mov rcx, r8
-    xor r8, r8
-    xor r9, r9
-
-    sub rsp, 8
-    mov qword ptr [rsp], 0
-    call linux_syscall
-    add rsp, 8
-    ret
-"#
-);
-
-unsafe extern "C" {
-    pub fn linux_syscall_entry() -> isize;
-}
 
 pub const SYS_READ: usize = 0;
 pub const SYS_WRITE: usize = 1;
@@ -64,13 +36,21 @@ pub extern "C" fn linux_syscall(
     _a5: usize,
     _a6: usize,
 ) -> isize {
+    crate::drivers::serial::write_str("ELF: linux_syscall entry\n");
     match num {
-        SYS_READ => sys_read(a1, a2 as *mut u8, a3),
-        SYS_WRITE => sys_write(a1, a2 as *const u8, a3),
+        SYS_READ => {
+            crate::drivers::serial::write_str("ELF: syscall READ\n");
+            sys_read(a1, a2 as *mut u8, a3)
+        }
+        SYS_WRITE => {
+            crate::drivers::serial::write_str("ELF: syscall WRITE\n");
+            sys_write(a1, a2 as *const u8, a3)
+        }
         SYS_OPEN => ENOSYS,
         SYS_CLOSE => ENOSYS,
         SYS_GETPID => 1,
         SYS_EXIT => {
+            crate::drivers::serial::write_str("ELF: syscall EXIT\n");
             EXIT_CODE.store(a1 as isize, Ordering::SeqCst);
             EXITED.store(true, Ordering::SeqCst);
             0

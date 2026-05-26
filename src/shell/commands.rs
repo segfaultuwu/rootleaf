@@ -144,29 +144,38 @@ pub fn execute_command(command: &[u8]) {
     }
 
     if starts_with_ignore_ascii_case(command, b"ELF ") {
+        crate::drivers::serial::write_str("ELF: command received\n");
         let arg = trim_ascii(&command[4..]);
         let mut path_buf = [0u8; 128];
         if let Some(path) = make_absolute_path(arg, &mut path_buf) {
+            crate::drivers::serial::write_str("ELF: resolved path\n");
             match crate::fs::vfs::read(path) {
-                Ok(data) => match crate::kernel::elf64::run(data) {
-                    Ok(code) => {
-                        crate::kernel::write_raw("ELF exited with code ");
-                        let mut buf = [0u8; 20];
-                        crate::kernel::write_raw(crate::lib::u64_to_str(code as u64, &mut buf));
-                        crate::print!("\n");
+                Ok(data) => {
+                    crate::drivers::serial::write_str("ELF: file read ok\n");
+                    match crate::kernel::elf64::run(data) {
+                        Ok(code) => {
+                            crate::drivers::serial::write_str("ELF: run returned ok\n");
+                            crate::kernel::write_raw("ELF exited with code ");
+                            let mut buf = [0u8; 20];
+                            crate::kernel::write_raw(crate::lib::u64_to_str(code as u64, &mut buf));
+                            crate::print!("\n");
+                        }
+                        Err(msg) => {
+                            crate::drivers::serial::write_str("ELF: run returned error\n");
+                            crate::kernel::write_raw("ELF error: ");
+                            crate::kernel::write_raw(msg);
+                            crate::print!("\n");
+                        }
                     }
-                    Err(msg) => {
-                        crate::kernel::write_raw("ELF error: ");
-                        crate::kernel::write_raw(msg);
-                        crate::print!("\n");
-                    }
-                },
+                }
                 Err(e) => {
+                    crate::drivers::serial::write_str("ELF: vfs read failed\n");
                     crate::kernel::write_raw(crate::fs::vfs::error_str(e));
                     crate::print!("\n");
                 }
             }
         } else {
+            crate::drivers::serial::write_str("ELF: invalid path\n");
             crate::print!("Invalid path\n");
         }
         return;
@@ -213,11 +222,11 @@ fn help() {
     crate::print!("  DIR            List files\n");
     crate::print!("  TYPE <FILE>    Show the contents of a file\n");
     crate::print!("  MOUNT <SRC> [DST]  Mount FAT32 image (DST defaults to 1:\\\n");
+    crate::print!("  UMOUNT         Unmount disk\n");
     crate::print!("  REBOOT         Restart machine\n");
     crate::print!("  EDIT <PATH>    Launch in-kernel editor for file\n");
     crate::print!("  RUN <PATH>     Execute file as script\n");
     crate::print!("  ELF <PATH>     Load and run ELF64 binary\n");
-    crate::print!("  SLS            List files in current directory\n");
     crate::print!("  RMD <PATH>     Delete file\n");
 }
 

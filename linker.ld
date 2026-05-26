@@ -5,7 +5,7 @@ ENTRY(_start)
 PHDRS {
     text    PT_LOAD FLAGS(5); /* R + X */
     rodata  PT_LOAD FLAGS(4); /* R */
-    data    PT_LOAD FLAGS(6); /* R + W */
+    data    PT_LOAD FLAGS(7); /* R + W + X */
 }
 
 SECTIONS {

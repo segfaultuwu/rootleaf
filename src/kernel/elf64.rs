@@ -104,7 +104,9 @@ fn parse_header(data: &[u8]) -> Option<&Elf64Ehdr> {
 }
 
 pub fn run(data: &[u8]) -> Result<isize, &'static str> {
+    crate::drivers::serial::write_str("ELF: run begin\n");
     let hdr = parse_header(data).ok_or("Invalid ELF64 header")?;
+    crate::drivers::serial::write_str("ELF: header parsed\n");
 
     let phoff = hdr.e_phoff as usize;
     let phnum = hdr.e_phnum as usize;
@@ -113,6 +115,7 @@ pub fn run(data: &[u8]) -> Result<isize, &'static str> {
     if phoff.checked_add(phnum * phsz).is_none() || phoff + phnum * phsz > data.len() {
         return Err("ELF program headers out of range");
     }
+    crate::drivers::serial::write_str("ELF: program headers range ok\n");
 
     let mut segs = [LoadedSeg {
         vaddr: 0,
@@ -179,6 +182,8 @@ pub fn run(data: &[u8]) -> Result<isize, &'static str> {
         arena_used = seg_end;
     }
 
+    crate::drivers::serial::write_str("ELF: segments loaded\n");
+
     if seg_count == 0 {
         return Err("No loadable segments");
     }
@@ -195,17 +200,31 @@ pub fn run(data: &[u8]) -> Result<isize, &'static str> {
     }
 
     let host_entry = host_entry.ok_or("Entry not in PT_LOAD segment")?;
+    crate::drivers::serial::write_str("ELF: host entry resolved\n");
 
     crate::kernel::syscall::reset_process_state();
+    crate::drivers::serial::write_str("ELF: process state reset\n");
 
+    crate::drivers::serial::write_str("ELF: invoking entry\n");
+    unsafe {
+        core::arch::asm!("cli", options(nomem, nostack));
+    }
+    crate::drivers::serial::write_str("ELF: interrupts disabled\n");
     let ret = invoke_user_entry(
         host_entry as *const (),
         crate::kernel::syscall::linux_syscall as *const () as usize,
     );
+    unsafe {
+        core::arch::asm!("sti", options(nomem, nostack));
+    }
+    crate::drivers::serial::write_str("ELF: interrupts enabled\n");
+    crate::drivers::serial::write_str("ELF: returned from entry\n");
 
     if let Some(code) = crate::kernel::syscall::take_exit_code() {
+        crate::drivers::serial::write_str("ELF: exit code from syscall state\n");
         Ok(code)
     } else {
+        crate::drivers::serial::write_str("ELF: return code from entry\n");
         Ok(ret)
     }
 }
