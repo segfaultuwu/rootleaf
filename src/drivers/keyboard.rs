@@ -1,7 +1,6 @@
-use core::sync::atomic::{AtomicBool, Ordering};
+use core::sync::atomic::{AtomicUsize, AtomicBool, Ordering};
 
-use crate::arch::x86_64::port::inb;
-use crate::drivers::serial::write_str;
+use crate::arch::x86_64::port::{inb, outb, io_wait};
 use crate::kernel::input;
 
 const KEYBOARD_DATA_PORT: u16 = 0x60;
@@ -10,26 +9,71 @@ const KEYBOARD_STATUS_PORT: u16 = 0x64;
 static SHIFT_PRESSED: AtomicBool = AtomicBool::new(false);
 static CAPS_LOCK: AtomicBool = AtomicBool::new(false);
 static EXTENDED_SCANCODE: AtomicBool = AtomicBool::new(false);
+static IRQ_COUNTER: AtomicUsize = AtomicUsize::new(0);
 
 pub fn init() {
-    write_str("Keyboard driver initialized\n");
+    unsafe fn wait_for_write() {
+        for _ in 0..1_000_000 {
+            if inb(KEYBOARD_STATUS_PORT) & 2 == 0 {
+                break;
+            }
+            io_wait();
+        }
+    }
+
+    unsafe fn wait_for_read() {
+        for _ in 0..1_000_000 {
+            if inb(KEYBOARD_STATUS_PORT) & 1 != 0 {
+                break;
+            }
+            io_wait();
+        }
+    }
+
+    unsafe {
+        // 1. Disable first PS/2 port while configuring
+        wait_for_write();
+        outb(KEYBOARD_STATUS_PORT, 0xAD);
+
+        // 2. Flush output buffer
+        while inb(KEYBOARD_STATUS_PORT) & 1 != 0 {
+            inb(KEYBOARD_DATA_PORT);
+        }
+
+        // 3. Read configuration byte
+        wait_for_write();
+        outb(KEYBOARD_STATUS_PORT, 0x20);
+        wait_for_read();
+        let mut config = inb(KEYBOARD_DATA_PORT);
+
+        // 4. Enable first PS/2 port interrupts
+        config |= 1;
+
+        // 5. Write configuration byte
+        wait_for_write();
+        outb(KEYBOARD_STATUS_PORT, 0x60);
+        wait_for_write();
+        outb(KEYBOARD_DATA_PORT, config);
+
+        // 6. Enable first PS/2 port
+        wait_for_write();
+        outb(KEYBOARD_STATUS_PORT, 0xAE);
+    }
 }
 
 pub fn handle_interrupt() {
-    let status = unsafe { inb(KEYBOARD_STATUS_PORT) };
+    let scancode = unsafe { inb(KEYBOARD_DATA_PORT) };
+    handle_scancode(scancode);
+}
 
-    // Bit 0 = output buffer full.
-    // If it is not set, there is no scancode to read.
+/// Poll keyboard controller once and process a scancode if available.
+pub fn poll_once() {
+    let status = unsafe { inb(KEYBOARD_STATUS_PORT) };
     if status & 1 == 0 {
         return;
     }
 
     let scancode = unsafe { inb(KEYBOARD_DATA_PORT) };
-
-    if scancode == 0 {
-        return;
-    }
-
     handle_scancode(scancode);
 }
 
@@ -57,7 +101,7 @@ fn handle_scancode(scancode: u8) {
             return;
         }
 
-        // Caps Lock press
+        // Caps Lock press (release 0xBA handled by generic key-release check below)
         0x3A => {
             let old = CAPS_LOCK.load(Ordering::SeqCst);
             CAPS_LOCK.store(!old, Ordering::SeqCst);
@@ -76,7 +120,10 @@ fn handle_scancode(scancode: u8) {
     let caps = CAPS_LOCK.load(Ordering::SeqCst);
 
     if let Some(byte) = scancode_to_ascii(scancode, shift, caps) {
-        let _ = input::enqueue(byte);
+        let enq = input::enqueue(byte);
+        if enq {
+            IRQ_COUNTER.fetch_add(1, Ordering::SeqCst);
+        }
     }
 }
 
@@ -87,8 +134,6 @@ fn handle_extended_scancode(scancode: u8) {
     }
 
     let byte = match scancode {
-        // Arrow keys as simple escape-like internal codes.
-        // Możesz potem zmienić to na własny enum Key.
         0x48 => b'w', // up
         0x50 => b's', // down
         0x4B => b'a', // left
@@ -98,6 +143,11 @@ fn handle_extended_scancode(scancode: u8) {
     };
 
     let _ = input::enqueue(byte);
+    IRQ_COUNTER.fetch_add(1, Ordering::SeqCst);
+}
+
+pub fn take_irq_count() -> usize {
+    IRQ_COUNTER.swap(0, Ordering::SeqCst)
 }
 
 fn scancode_to_ascii(scancode: u8, shift: bool, caps: bool) -> Option<u8> {

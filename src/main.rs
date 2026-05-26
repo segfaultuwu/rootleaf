@@ -7,6 +7,7 @@ mod arch;
 mod drivers;
 mod kernel;
 mod lib;
+mod fs;
 
 #[macro_use]
 mod macros;
@@ -101,8 +102,23 @@ pub extern "C" fn _start() -> ! {
 
     // Event-driven input: wait for a byte and print it
     loop {
-        let b = crate::kernel::input::wait_for_byte();
-        crate::print!("{}", (b as char));
+        if let Some(b) = crate::kernel::input::dequeue() {
+            crate::print!("{}", (b as char));
+            continue;
+        }
+
+        let irq_count = crate::drivers::keyboard::take_irq_count();
+        if irq_count > 0 {
+            continue;
+        }
+
+        // Wait step (in case we need some time)
+        // Note: the keyboard interrupt should wake us if it triggers.
+        crate::drivers::keyboard::poll_once();
+
+        // Small pause to reduce busy-wait heat while polling.
+        crate::kernel::tick_cursor();
+        unsafe { core::arch::asm!("pause", options(nomem, nostack)); }
     }
 }
 

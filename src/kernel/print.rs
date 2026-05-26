@@ -15,6 +15,17 @@ pub fn init(console: ConsoleDriver) {
     }
 }
 
+pub fn tick_cursor() {
+    unsafe {
+        match (*CONSOLE.0.get()).as_mut() {
+            Some(console) => {
+                console.tick_cursor();
+            }
+            None => {}
+        }
+    }
+}
+
 pub struct KernelWriter;
 
 impl Write for KernelWriter {

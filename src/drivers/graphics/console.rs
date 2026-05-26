@@ -28,6 +28,8 @@ pub struct ConsoleDriver {
     pub bytes_per_pixel: usize,
     pub cursor_x: usize,
     pub cursor_y: usize,
+    pub cursor_visible: bool,
+    pub blink_counter: usize,
 }
 
 impl ConsoleDriver {
@@ -48,6 +50,8 @@ impl ConsoleDriver {
             bytes_per_pixel,
             cursor_x: 0,
             cursor_y: 0,
+            cursor_visible: false,
+            blink_counter: 0,
         }
     }
 
@@ -60,6 +64,38 @@ impl ConsoleDriver {
 
         self.cursor_x = 0;
         self.cursor_y = 0;
+    }
+
+    pub fn draw_cursor(&mut self, fg: ConsoleColor, bg: ConsoleColor) {
+        let glyph_width = self.font_width();
+        let glyph_height = self.font_height();
+
+        let base_x = self.cursor_x * glyph_width;
+        let base_y = self.cursor_y * glyph_height;
+
+        for y in 0..glyph_height {
+            for x in 0..glyph_width {
+                let color = if (x + y) % 2 == 0 { fg } else { bg };
+                self.put_pixel(base_x + x, base_y + y, color);
+            }
+        }
+    }
+
+    pub fn tick_cursor(&mut self) {
+        self.blink_counter = self.blink_counter.wrapping_add(1);
+        // Toggle roughly every 500000 ticks; caller decides tick frequency.
+        if self.blink_counter % 500000 != 0 {
+            return;
+        }
+
+        self.cursor_visible = !self.cursor_visible;
+
+        if self.cursor_visible {
+            self.draw_cursor(ConsoleColor::WHITE, ConsoleColor::BLACK);
+        } else {
+            // Erase cursor by redrawing a space at cursor position.
+            self.draw_char(b' ', ConsoleColor::WHITE, ConsoleColor::BLACK);
+        }
     }
 
     pub fn put_pixel(&mut self, x: usize, y: usize, color: ConsoleColor) {
@@ -90,6 +126,16 @@ impl ConsoleDriver {
                 for _ in 0..4 {
                     self.write_byte(b' ');
                 }
+            }
+            b'\x08' => {
+                // Backspace: move cursor back and erase the character
+                if self.cursor_x > 0 {
+                    self.cursor_x -= 1;
+                } else if self.cursor_y > 0 {
+                    self.cursor_y -= 1;
+                    self.cursor_x = self.cols().saturating_sub(1);
+                }
+                self.draw_char(b' ', ConsoleColor::WHITE, ConsoleColor::BLACK);
             }
             byte => {
                 self.draw_char(byte, ConsoleColor::WHITE, ConsoleColor::BLACK);

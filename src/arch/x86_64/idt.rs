@@ -30,7 +30,7 @@ impl IdtEntry {
 
         self.offset_low = addr as u16;
         self.selector = 0x08; // kernel code segment
-        self.options = 0x8E00; // present, ring 0, interrupt gate
+        self.options = 0x008E; // present, ring 0, interrupt gate
         self.offset_mid = (addr >> 16) as u16;
         self.offset_high = (addr >> 32) as u32;
         self.reserved = 0;
@@ -44,7 +44,7 @@ impl IdtEntry {
 
         self.offset_low = addr as u16;
         self.selector = 0x08;
-        self.options = 0x8E00;
+        self.options = 0x008E;
         self.offset_mid = (addr >> 16) as u16;
         self.offset_high = (addr >> 32) as u32;
         self.reserved = 0;
@@ -58,7 +58,7 @@ impl IdtEntry {
 
         self.offset_low = addr as u16;
         self.selector = 0x08;
-        self.options = 0x8E00;
+        self.options = 0x008E;
         self.offset_mid = (addr >> 16) as u16;
         self.offset_high = (addr >> 32) as u32;
         self.reserved = 0;

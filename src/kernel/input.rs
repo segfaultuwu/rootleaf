@@ -18,7 +18,8 @@ pub fn enqueue(byte: u8) -> bool {
     }
 
     unsafe {
-        INPUT_BUF[head] = byte;
+        let base = core::ptr::addr_of_mut!(INPUT_BUF) as *mut u8;
+        core::ptr::write_volatile(base.add(head), byte);
     }
 
     HEAD.store(next, Ordering::Release);
@@ -33,7 +34,10 @@ pub fn dequeue() -> Option<u8> {
         return None;
     }
 
-    let byte = unsafe { INPUT_BUF[tail] };
+    let byte = unsafe {
+        let base = core::ptr::addr_of_mut!(INPUT_BUF) as *mut u8;
+        core::ptr::read_volatile(base.add(tail))
+    };
     let next = (tail + 1) % INPUT_BUF_SIZE;
     TAIL.store(next, Ordering::Release);
     Some(byte)
@@ -48,7 +52,7 @@ pub fn wait_for_byte() -> u8 {
 
         // Enable interrupts and halt until the next interrupt wakes us.
         unsafe {
-            core::arch::asm!("sti; hlt", options(nomem, nostack));
+            core::arch::asm!("sti; hlt", options(nostack));
         }
     }
 }

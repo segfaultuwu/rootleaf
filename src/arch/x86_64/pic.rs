@@ -47,36 +47,18 @@ pub unsafe fn remap() {
 }
 
 pub unsafe fn enable_irq(irq: u8) {
-    let port = if irq < 8 {
-        0x21
-    } else {
-        0xA1
-    };
-
-    let irq_line = if irq < 8 {
-        irq
-    } else {
-        irq - 8
-    };
+    let port: u16 = if irq < 8 { PIC1_DATA } else { PIC2_DATA };
+    let irq_line = if irq < 8 { irq } else { irq - 8 };
 
     unsafe {
-        let mask = crate::arch::x86_64::port::inb(port);
-        crate::arch::x86_64::port::outb(port, mask & !(1 << irq_line));
+        let mask = inb(port);
+        outb(port, mask & !(1 << irq_line));
     }
 }
 
 pub unsafe fn disable_irq(irq: u8) {
-    let port = if irq < 8 {
-        PIC1_DATA
-    } else {
-        PIC2_DATA
-    };
-
-    let irq_line = if irq < 8 {
-        irq
-    } else {
-        irq - 8
-    };
+    let port: u16 = if irq < 8 { PIC1_DATA } else { PIC2_DATA };
+    let irq_line = if irq < 8 { irq } else { irq - 8 };
 
     unsafe {
         let mask = inb(port) | (1 << irq_line);

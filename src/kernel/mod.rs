@@ -5,3 +5,4 @@ pub mod input;
 
 pub use panic::hlt_loop;
 pub use print::{_print, init as init_console};
+pub use print::tick_cursor;
