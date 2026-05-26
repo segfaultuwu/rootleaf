@@ -419,78 +419,67 @@ fn mount_device_prefix(backend: VfsBackend) -> &'static str {
 pub fn build_dev_list() -> &'static [u8] {
     static mut BUF: [u8; 512] = [0; 512];
 
+    let mut len = 0usize;
+
+    fn push(buf: *mut u8, len: &mut usize, s: &str) {
+        for &b in s.as_bytes() {
+            if *len >= 511 {
+                return;
+            }
+
+            unsafe {
+                core::ptr::write(buf.add(*len), b);
+            }
+
+            *len += 1;
+        }
+    }
+
+    fn sd_name(index: usize) -> &'static str {
+        match index {
+            0 => "sda",
+            1 => "sdb",
+            2 => "sdc",
+            3 => "sdd",
+            4 => "sde",
+            5 => "sdf",
+            6 => "sdg",
+            7 => "sdh",
+            8 => "sdi",
+            9 => "sdj",
+            _ => "sd?",
+        }
+    }
+
     unsafe {
-        let buf_ptr = (&raw mut BUF) as *mut [u8; 512] as *mut u8;
-        let mut len = 0usize;
+        let buf = core::ptr::addr_of_mut!(BUF) as *mut u8;
 
-        // Always include a few virtual devices
-        write_str(buf_ptr, 512, &mut len, "null\n");
-        write_str(buf_ptr, 512, &mut len, "zero\n");
-        write_str(buf_ptr, 512, &mut len, "console\n");
-        write_str(buf_ptr, 512, &mut len, "tty\n");
-        write_str(buf_ptr, 512, &mut len, "keyboard\n");
+        push(buf, &mut len, "null\n");
+        push(buf, &mut len, "zero\n");
+        push(buf, &mut len, "console\n");
+        push(buf, &mut len, "tty\n");
+        push(buf, &mut len, "keyboard\n");
+        push(buf, &mut len, "loop0\n");
+        push(buf, &mut len, "loop0p1\n");
 
-        // For each active mount entry, assign a synthetic block device name.
-        // ISO9660 mounts are presented as CD-ROMs; everything else is loopback-backed.
-        let mounts = &*MOUNTS.0.get();
-        let mut mount_index = 0usize;
-        for m in mounts.iter() {
-            if !m.used {
-                continue;
-            }
-            if matches!(
-                m.backend,
-                VfsBackend::Dev | VfsBackend::Proc | VfsBackend::Root
-            ) {
-                continue;
-            }
+        let sata_count = crate::drivers::sata::drive_count();
 
-            write_str(buf_ptr, 512, &mut len, mount_device_prefix(m.backend));
-            write_u64(buf_ptr, 512, &mut len, mount_index as u64);
-            if len < 512 {
-                core::ptr::write(buf_ptr.add(len), b'\n');
-                len += 1;
-            }
-
-            write_str(buf_ptr, 512, &mut len, mount_device_prefix(m.backend));
-            write_u64(buf_ptr, 512, &mut len, mount_index as u64);
-            write_str(buf_ptr, 512, &mut len, "p1");
-            if len < 512 {
-                core::ptr::write(buf_ptr.add(len), b'\n');
-                len += 1;
-            }
-
-            mount_index += 1;
-        }
-
-        // Detect physical disks and append unmounted disks if needed
-        let st = crate::drivers::pci::scan_storage();
         let ata = crate::drivers::pci::scan_legacy_ata();
-        let detected = st.total() + ata.ata_devices;
+        let ata_count = ata.ata_devices as usize;
 
-        let mut disk_index = 0usize;
-        while disk_index < detected && disk_index < 26 {
-            let letter = b'a' + (disk_index as u8);
-            let nameb = [b's', b'd', letter];
-            let s = core::str::from_utf8(&nameb).unwrap_or("sd?");
-            write_str(buf_ptr, 512, &mut len, s);
-            if len < 512 {
-                core::ptr::write(buf_ptr.add(len), b'\n');
-                len += 1;
-            }
+        let total = sata_count + ata_count;
 
-            let partb = [b's', b'd', letter, b'1'];
-            let ps = core::str::from_utf8(&partb).unwrap_or("sd?1");
-            write_str(buf_ptr, 512, &mut len, ps);
-            if len < 512 {
-                core::ptr::write(buf_ptr.add(len), b'\n');
-                len += 1;
-            }
+        for i in 0..total {
+            let name = sd_name(i);
 
-            disk_index += 1;
+            push(buf, &mut len, name);
+            push(buf, &mut len, "\n");
+
+            push(buf, &mut len, name);
+            push(buf, &mut len, "1\n");
         }
 
-        core::slice::from_raw_parts(buf_ptr as *const u8, len)
+        core::slice::from_raw_parts(buf, len)
     }
 }
 

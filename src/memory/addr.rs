@@ -25,3 +25,16 @@ pub fn is_aligned(addr: u64, align: u64) -> bool {
 
     addr % align == 0
 }
+
+use crate::boot::limine::HHDM_REQUEST;
+
+pub fn hhdm_offset() -> usize {
+    HHDM_REQUEST
+        .response()
+        .expect("missing Limine HHDM response")
+        .offset as usize
+}
+
+pub fn phys_to_virt(phys: usize) -> usize {
+    hhdm_offset().wrapping_add(phys)
+}

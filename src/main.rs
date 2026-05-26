@@ -39,12 +39,12 @@ pub extern "C" fn _start() -> ! {
     drivers::init();
     drivers::serial::write_str("Rootleaf: serial initialized\n");
 
+    memory::init();
+
     if !BASE_REVISION.is_supported() {
         drivers::serial::write_str("Rootleaf: unsupported Limine base revision\n");
         hlt_loop();
     }
-
-    memory::init();
 
     crate::fs::cwd::init("/");
 
@@ -229,4 +229,41 @@ fn print_framebuffer_info(framebuffer: &limine::framebuffer::Framebuffer) {
     drivers::serial::write_str("bpp=");
     drivers::serial::write_str(u32_to_str(framebuffer.bpp as u32, &mut buf));
     drivers::serial::write_str("\n");
+}
+
+fn try_mount_sata_disk() {
+    if !crate::drivers::sata::is_available() {
+        crate::drivers::serial::write_str("Rootleaf: no SATA/AHCI controller available\n");
+        return;
+    }
+
+    let drives = crate::drivers::sata::drive_count();
+
+    crate::drivers::serial::write_str("Rootleaf: SATA drive_count=");
+    crate::drivers::serial::write_hex(drives);
+    crate::drivers::serial::write_str("\n");
+
+    if drives == 0 {
+        crate::drivers::serial::write_str(
+            "Rootleaf: SATA controller detected, but no SATA disks are usable yet\n",
+        );
+        crate::drivers::serial::write_str(
+            "Rootleaf: skipping SATA auto-mount until AHCI MMIO/DMA is implemented\n",
+        );
+        return;
+    }
+
+    match crate::fs::fat32::mount_first_sata() {
+        Ok(()) => {
+            crate::drivers::serial::write_str("Rootleaf: auto-mounted SATA disk at /disk1\n");
+
+            let _ = crate::fs::vfs::mount("disk1", crate::fs::vfs::VfsBackend::Fat32);
+        }
+
+        Err(e) => {
+            crate::drivers::serial::write_str("Rootleaf: SATA auto-mount failed: ");
+            crate::drivers::serial::write_str(e);
+            crate::drivers::serial::write_str("\n");
+        }
+    }
 }

@@ -19,3 +19,12 @@ macro_rules! println {
         $crate::print!(core::concat!($fmt, "\n"), $($arg)*);
     }};
 }
+
+#[macro_export]
+macro_rules! format {
+    ($($arg:tt)*) => {{
+        $crate::kernel::kstring::format_args_to_kstring::<256>(
+            core::format_args!($($arg)*)
+        )
+    }};
+}

@@ -203,69 +203,83 @@ pub fn execute_command(command: &[u8]) {
 }
 
 fn lsblk() {
-    crate::print!("NAME   PART   MOUNTPOINT\n");
+    crate::print!("NAME     PART   MOUNTPOINT\n");
 
-    match crate::fs::vfs::read("/etc/mtab") {
-        Ok(data) => {
-            if let Ok(text) = core::str::from_utf8(data) {
-                let mut mounted_count = 0usize;
+    crate::print!("loop0\n");
+    crate::print!("  - loop0p1   /ram\n");
 
-                for line in text.lines() {
-                    let line = line.trim();
-                    if line.is_empty() {
-                        continue;
-                    }
+    let sata_count = crate::drivers::sata::drive_count();
+    let ata = crate::drivers::pci::scan_legacy_ata();
+    let ata_count = ata.ata_devices as usize;
 
-                    let mut parts = line.split_whitespace();
-                    let dev = parts.next().unwrap_or("");
-                    let mount = parts.next().unwrap_or("");
+    let total = sata_count + ata_count;
 
-                    if !(dev.starts_with("loop")
-                        || dev.starts_with("cdrom")
-                        || dev.starts_with("sd"))
-                    {
-                        continue;
-                    }
+    for i in 0..total {
+        let name = sd_name(i);
 
-                    crate::kernel::write_raw(dev);
-                    crate::print!("\n");
+        crate::kernel::write_raw(name);
+        crate::print!("\n");
 
-                    crate::kernel::write_raw("  - ");
-                    crate::kernel::write_raw(dev);
-                    crate::kernel::write_raw("p1   ");
-                    crate::kernel::write_raw(mount);
-                    crate::print!("\n");
+        crate::kernel::write_raw("  - ");
+        crate::kernel::write_raw(name);
+        crate::kernel::write_raw("1   ");
 
-                    mounted_count += 1;
-                }
-
-                // Detect additional physical disks and list them as unmounted if not already present
-                let st = crate::drivers::pci::scan_storage();
-                let ata = crate::drivers::pci::scan_legacy_ata();
-                let detected = st.ide + st.sata + st.scsi + st.nvme + st.other + ata.ata_devices;
-
-                let mut i = mounted_count;
-                while i < detected && i < 26 {
-                    let mut nameb = [b's', b'd', b'a' + (i as u8)];
-                    let devname = core::str::from_utf8(&nameb).unwrap_or("sd?");
-                    crate::kernel::write_raw(devname);
-                    crate::print!("\n");
-
-                    crate::kernel::write_raw("  - ");
-                    crate::kernel::write_raw(devname);
-                    crate::kernel::write_raw("1   (not mounted)");
-                    crate::print!("\n");
-
-                    i += 1;
-                }
-            }
+        if i == 0 && crate::fs::fat32::is_mounted() {
+            crate::kernel::write_raw("/disk1");
+        } else {
+            crate::kernel::write_raw("(not mounted)");
         }
-        Err(_) => {
-            crate::print!("No mount information available\n");
-        }
+
+        crate::print!("\n");
     }
 
     after_vfs_op();
+}
+
+fn sd_name(index: usize) -> &'static str {
+    match index {
+        0 => "sda",
+        1 => "sdb",
+        2 => "sdc",
+        3 => "sdd",
+        4 => "sde",
+        5 => "sdf",
+        6 => "sdg",
+        7 => "sdh",
+        8 => "sdi",
+        9 => "sdj",
+        10 => "sdk",
+        11 => "sdl",
+        12 => "sdm",
+        13 => "sdn",
+        14 => "sdo",
+        15 => "sdp",
+        _ => "sd?",
+    }
+}
+
+fn pad_name(name: &str, width: usize) {
+    let len = name.len();
+
+    if len >= width {
+        return;
+    }
+
+    for _ in 0..(width - len) {
+        crate::kernel::write_byte(b' ');
+    }
+}
+
+fn pad_name_with_extra(name: &str, width: usize, extra: usize) {
+    let len = name.len() + extra;
+
+    if len >= width {
+        return;
+    }
+
+    for _ in 0..(width - len) {
+        crate::kernel::write_byte(b' ');
+    }
 }
 
 fn help() {
@@ -293,7 +307,7 @@ fn help() {
     crate::print!("  RUN <FILE>           Execute shell script\n");
     crate::print!("  ELF <FILE>           Load and run ELF64 binary\n");
     crate::print!("  EXEC <FILE>          Alias for ELF\n");
-    crate::print!("  MOUNT <SRC> [DST]    Mount FAT32 image or physical disk\n");
+    crate::print!("  MOUNT <SRC><DST>[FS] Mount image or /dev/sdX device\n");
     crate::print!("  UMOUNT               Unmount /disk1\n");
     crate::print!("  DISKINFO             Show disk information\n");
     crate::print!("  MOUNTS               Show mounted filesystems\n");
@@ -907,9 +921,10 @@ fn mount_cmd(arg: &[u8]) {
     let arg = trim_ascii(arg);
 
     if arg.is_empty() {
-        crate::print!("Usage: MOUNT <IMAGE_PATH>\n");
-        crate::print!("   or: MOUNT DISK1 /disk1\n");
-        crate::print!("   or: MOUNT \\\\DISK1 /disk1\n");
+        crate::print!("Usage: MOUNT <IMAGE_PATH> <TARGET> [FSTYPE]\n");
+        crate::print!("   or: MOUNT /dev/sda /disk1\n");
+        crate::print!("   or: MOUNT /dev/sda1 /disk1 fat32\n");
+        crate::print!("   or: MOUNT /dev/sda1 /disk1 ext2\n");
         return;
     }
 
@@ -955,23 +970,6 @@ fn mount_cmd(arg: &[u8]) {
         mount_with_target(
             source,
             target,
-            if fstype.is_empty() {
-                None
-            } else {
-                Some(fstype)
-            },
-        );
-        return;
-    }
-
-    // Support legacy shorthand: `mount disk1` should mount the physical disk at /disk1
-    if eq_ignore_ascii_case(source, b"DISK1")
-        || eq_ignore_ascii_case(source, b"\\DISK1")
-        || eq_ignore_ascii_case(source, b"\\\\DISK1")
-    {
-        mount_with_target(
-            source,
-            b"/disk1",
             if fstype.is_empty() {
                 None
             } else {
@@ -1115,250 +1113,320 @@ fn mount_ata_autodetect(disk_idx: usize, target_path: &str) {
     }
 }
 
+#[derive(Clone, Copy)]
+enum BlockDeviceKind {
+    Sata,
+    Ata,
+}
+
+#[derive(Clone, Copy)]
+struct BlockDevice {
+    kind: BlockDeviceKind,
+    index: usize,
+}
+
+fn resolve_block_device(dev: &str) -> Option<BlockDevice> {
+    if !dev.starts_with("sd") || dev.len() < 3 {
+        return None;
+    }
+
+    let letter = dev.as_bytes()[2];
+
+    if letter < b'a' || letter > b'z' {
+        return None;
+    }
+
+    let index = (letter - b'a') as usize;
+
+    let sata_count = crate::drivers::sata::drive_count();
+
+    if index < sata_count {
+        return Some(BlockDevice {
+            kind: BlockDeviceKind::Sata,
+            index,
+        });
+    }
+
+    let ata = crate::drivers::pci::scan_legacy_ata();
+    let ata_index = index.saturating_sub(sata_count);
+
+    if ata_index < ata.ata_devices as usize {
+        return Some(BlockDevice {
+            kind: BlockDeviceKind::Ata,
+            index: ata_index,
+        });
+    }
+
+    None
+}
+
+fn block_read_sector(
+    dev: BlockDevice,
+    lba: u32,
+    out: &mut [u8; 512],
+) -> Result<(), &'static str> {
+    match dev.kind {
+        BlockDeviceKind::Sata => {
+            match crate::drivers::sata::read_sector(lba as u64, out) {
+                Ok(()) => Ok(()),
+
+                Err(crate::drivers::sata::SataError::MmioNotMapped) => {
+                    Err("SATA/AHCI disk access is not implemented yet")
+                }
+
+                Err(crate::drivers::sata::SataError::NoController) => {
+                    Err("No SATA controller detected")
+                }
+
+                Err(crate::drivers::sata::SataError::NoDrive) => {
+                    Err("No SATA drive detected")
+                }
+
+                Err(_) => Err("Failed to read SATA sector"),
+            }
+        }
+
+        BlockDeviceKind::Ata => {
+            crate::drivers::ata::read_sector(dev.index, lba, out)
+                .map_err(|_| "Failed to read ATA sector")
+        }
+    }
+}
+
 fn mount_with_target(source: &[u8], target: &[u8], fstype: Option<&[u8]>) {
-    // Allow arbitrary targets; convert target to absolute path string
     let mut path_buf = [0u8; 128];
+
     let target_path = match make_absolute_path(target, &mut path_buf) {
-        Some(p) => p,
+        Some(path) => path,
+
         None => {
             crate::print!("Invalid target path\n");
+            after_vfs_op();
             return;
         }
     };
 
-    // Special case physical DISK1 source
-    if eq_ignore_ascii_case(source, b"\\DISK1")
-        || eq_ignore_ascii_case(source, b"\\\\DISK1")
-        || eq_ignore_ascii_case(source, b"DISK1")
-    {
-        let st = crate::drivers::pci::scan_storage();
-        let ata = crate::drivers::pci::scan_legacy_ata();
-        let detected =
-            st.total() > 0 || ata.channels > 0 || ata.ata_devices > 0 || ata.atapi_devices > 0;
+    if source.starts_with(b"/dev/") {
+        let Ok(devstr) = core::str::from_utf8(source) else {
+            crate::print!("Invalid device path\n");
+            after_vfs_op();
+            return;
+        };
 
-        if !detected {
-            crate::print!("Disk 1 is not detected\n");
+        let dev = &devstr[5..];
+
+        if !dev.starts_with("sd") {
+            crate::print!("Unsupported device\n");
+            after_vfs_op();
             return;
         }
 
-        match crate::fs::fat32::mount_first_ata() {
-            Ok(()) => {
-                let _ = crate::fs::vfs::mount(target_path, crate::fs::vfs::VfsBackend::Fat32);
-                // Also expose legacy /disk1 mount for compatibility
-                let _ = crate::fs::vfs::mount("disk1", crate::fs::vfs::VfsBackend::Fat32);
-                crate::kernel::write_raw("Mounted physical ATA disk at ");
-                crate::kernel::write_raw(target_path);
-                crate::print!("\n");
+        let Some(block_dev) = resolve_block_device(dev) else {
+            crate::print!("No such block device\n");
+            after_vfs_op();
+            return;
+        };
+
+        /*
+            Parse partition number:
+                sda  -> None
+                sda1 -> Some(1)
+                sdb2 -> Some(2)
+        */
+        let mut part_idx: Option<usize> = None;
+
+        for (i, c) in dev.chars().enumerate() {
+            if c.is_ascii_digit() {
+                part_idx = Some(i);
+                break;
+            }
+        }
+
+        /*
+            Whole-disk autodetect:
+                mount /dev/sda /mnt
+
+            Only supported for legacy ATA right now. SATA read_sector() is still a stub
+            until AHCI MMIO + DMA are implemented.
+        */
+        if part_idx.is_none() && fstype.is_none() {
+            match block_dev.kind {
+                BlockDeviceKind::Ata => {
+                    mount_ata_autodetect(block_dev.index, target_path);
+                }
+
+                BlockDeviceKind::Sata => {
+                    crate::print!("SATA/AHCI full-disk mount is not implemented yet\n");
+                }
             }
 
-            Err(message) => {
-                crate::kernel::write_raw(message);
+            after_vfs_op();
+            return;
+        }
+
+        /*
+            If user provides filesystem type, allow:
+                mount /dev/sda /mnt ext2
+            to mean:
+                mount /dev/sda1 /mnt ext2
+        */
+        let part = if let Some(idx) = part_idx {
+            let digs = &dev[idx..];
+
+            match digs.parse::<usize>() {
+                Ok(n) if n > 0 => n,
+
+                _ => {
+                    crate::print!("Invalid device partition\n");
+                    after_vfs_op();
+                    return;
+                }
+            }
+        } else if fstype.is_some() {
+            1
+        } else {
+            crate::print!("Specify partition like /dev/sda1 or provide filesystem type\n");
+            after_vfs_op();
+            return;
+        };
+
+        let mut sector = [0u8; 512];
+
+        if let Err(error) = block_read_sector(block_dev, 0, &mut sector) {
+            crate::kernel::write_raw(error);
+            crate::print!("\n");
+            after_vfs_op();
+            return;
+        }
+
+        let p_off = 446 + (part - 1) * 16;
+
+        if p_off + 16 > 512 {
+            crate::print!("Invalid partition index\n");
+            after_vfs_op();
+            return;
+        }
+
+        if sector[510] != 0x55 || sector[511] != 0xAA {
+            crate::print!("Invalid or unsupported MBR\n");
+            after_vfs_op();
+            return;
+        }
+
+        let start_lba = (sector[p_off + 8] as u32)
+            | ((sector[p_off + 9] as u32) << 8)
+            | ((sector[p_off + 10] as u32) << 16)
+            | ((sector[p_off + 11] as u32) << 24);
+
+        let num_sectors = (sector[p_off + 12] as u32)
+            | ((sector[p_off + 13] as u32) << 8)
+            | ((sector[p_off + 14] as u32) << 16)
+            | ((sector[p_off + 15] as u32) << 24);
+
+        if start_lba == 0 || num_sectors == 0 {
+            crate::print!("Partition not present or empty\n");
+            after_vfs_op();
+            return;
+        }
+
+        const MAX_BYTES: usize = 4 * 1024 * 1024;
+        static mut TMP_BUF: [u8; MAX_BYTES] = [0u8; MAX_BYTES];
+
+        let mut bytes_to_read = (num_sectors as usize).saturating_mul(512);
+
+        if bytes_to_read > MAX_BYTES {
+            bytes_to_read = MAX_BYTES;
+        }
+
+        let sectors_to_read = (bytes_to_read + 511) / 512;
+        let mut written = 0usize;
+
+        for i in 0..sectors_to_read {
+            let lba = start_lba.wrapping_add(i as u32);
+            let mut sec = [0u8; 512];
+
+            if let Err(error) = block_read_sector(block_dev, lba, &mut sec) {
+                crate::kernel::write_raw(error);
                 crate::print!("\n");
+                after_vfs_op();
+                return;
+            }
+
+            unsafe {
+                let copy_n = core::cmp::min(512, MAX_BYTES - written);
+
+                let tmp_ptr = core::ptr::addr_of_mut!(TMP_BUF) as *mut u8;
+
+                core::ptr::copy_nonoverlapping(
+                    sec.as_ptr(),
+                    tmp_ptr.add(written),
+                    copy_n,
+                );
+
+                written += copy_n;
+            }
+        }
+
+        let data = unsafe {
+            core::slice::from_raw_parts(
+                core::ptr::addr_of!(TMP_BUF) as *const u8,
+                written,
+            )
+        };
+
+        match fstype {
+            Some(ft) => match core::str::from_utf8(ft) {
+                Ok("ext2") | Ok("ext3") | Ok("Ext2") | Ok("Ext3") => {
+                    if crate::fs::ext2::mount(data) {
+                        let _ =
+                            crate::fs::vfs::mount(target_path, crate::fs::vfs::VfsBackend::Ext2);
+
+                        crate::kernel::write_raw("Mounted ext2/3 partition at ");
+                        crate::kernel::write_raw(target_path);
+                        crate::print!("\n");
+                    } else {
+                        crate::print!("Failed to mount ext2/3 partition\n");
+                    }
+                }
+
+                Ok("fat32") | Ok("vfat") | Ok("FAT32") => {
+                    if crate::fs::fat32::mount(data) {
+                        let _ =
+                            crate::fs::vfs::mount(target_path, crate::fs::vfs::VfsBackend::Fat32);
+
+                        crate::kernel::write_raw("Mounted FAT32 partition at ");
+                        crate::kernel::write_raw(target_path);
+                        crate::print!("\n");
+                    } else {
+                        crate::print!("Failed to mount FAT32 partition\n");
+                    }
+                }
+
+                Ok("isofs") | Ok("iso9660") | Ok("iso") | Ok("cdrom") => {
+                    if crate::fs::isofs::mount(data) {
+                        let _ =
+                            crate::fs::vfs::mount(target_path, crate::fs::vfs::VfsBackend::Isofs);
+
+                        crate::kernel::write_raw("Mounted ISO9660 partition at ");
+                        crate::kernel::write_raw(target_path);
+                        crate::print!("\n");
+                    } else {
+                        crate::print!("Failed to mount ISO9660 partition\n");
+                    }
+                }
+
+                _ => {
+                    crate::print!("Unsupported filesystem type for /dev mounting\n");
+                }
+            },
+
+            None => {
+                crate::print!("Specify filesystem type when mounting /dev devices\n");
             }
         }
 
         after_vfs_op();
         return;
-    }
-
-    // Otherwise treat source as image/file path
-    // Support device-style sources like /dev/sda1
-    if source.starts_with(b"/dev/") {
-        if let Ok(devstr) = core::str::from_utf8(source) {
-            let dev = &devstr[5..];
-
-            if dev.starts_with("sd") {
-                // Parse disk letter to index: sda=0, sdb=1, ...
-                let disk_idx = if dev.len() >= 3 {
-                    let letter = dev.as_bytes()[2];
-
-                    if letter < b'a' || letter > b'z' {
-                        crate::print!("Invalid disk name\n");
-                        after_vfs_op();
-                        return;
-                    }
-
-                    (letter - b'a') as usize
-                } else {
-                    crate::print!("Invalid disk name\n");
-                    after_vfs_op();
-                    return;
-                };
-
-                // Parse partition number if present: sda1 -> part 1
-                let mut part_idx: Option<usize> = None;
-
-                for (i, c) in dev.chars().enumerate() {
-                    if c.is_ascii_digit() {
-                        part_idx = Some(i);
-                        break;
-                    }
-                }
-
-                // If no partition number and no explicit fstype, mount whole disk with auto-detect.
-                if part_idx.is_none() && fstype.is_none() {
-                    mount_ata_autodetect(disk_idx, target_path);
-                    after_vfs_op();
-                    return;
-                }
-
-                // Need partition number to mount specific partition.
-                let part = if let Some(idx) = part_idx {
-                    let digs = &dev[idx..];
-
-                    if let Ok(n) = digs.parse::<usize>() {
-                        n
-                    } else {
-                        crate::print!("Invalid device partition\n");
-                        after_vfs_op();
-                        return;
-                    }
-                } else {
-                    crate::print!("Specify partition like /dev/sda1\n");
-                    after_vfs_op();
-                    return;
-                };
-
-                // Parse disk letter to index: sda=0, sdb=1, ...
-                let disk_idx = if dev.len() >= 3 {
-                    (dev.as_bytes()[2].wrapping_sub(b'a')) as usize
-                } else {
-                    0
-                };
-
-                // Read MBR sector to find partition start LBA
-                let mut sector = [0u8; 512];
-                if crate::drivers::ata::read_sector(disk_idx, 0, &mut sector).is_err() {
-                    crate::print!("Failed to read disk MBR\n");
-                    after_vfs_op();
-                    return;
-                }
-
-                // partition table entry at offset 446 + (part-1)*16
-                let p_off = 446 + (part - 1) * 16;
-                if p_off + 16 > 512 {
-                    crate::print!("Invalid partition index\n");
-                    after_vfs_op();
-                    return;
-                }
-
-                let start_lba = (sector[p_off + 8] as u32)
-                    | ((sector[p_off + 9] as u32) << 8)
-                    | ((sector[p_off + 10] as u32) << 16)
-                    | ((sector[p_off + 11] as u32) << 24);
-
-                let num_sectors = (sector[p_off + 12] as u32)
-                    | ((sector[p_off + 13] as u32) << 8)
-                    | ((sector[p_off + 14] as u32) << 16)
-                    | ((sector[p_off + 15] as u32) << 24);
-
-                if start_lba == 0 || num_sectors == 0 {
-                    crate::print!("Partition not present or empty\n");
-                    after_vfs_op();
-                    return;
-                }
-
-                // read up to 4MiB from partition into temp buffer
-                const MAX_BYTES: usize = 4 * 1024 * 1024;
-                static mut TMP_BUF: [u8; MAX_BYTES] = [0u8; MAX_BYTES];
-
-                let mut bytes_to_read = (num_sectors as usize).saturating_mul(512);
-                if bytes_to_read > MAX_BYTES {
-                    bytes_to_read = MAX_BYTES;
-                }
-
-                let sectors_to_read = (bytes_to_read + 511) / 512;
-
-                let mut written = 0usize;
-                for i in 0..sectors_to_read {
-                    let lba = start_lba.wrapping_add(i as u32);
-                    let mut sec = [0u8; 512];
-                    if crate::drivers::ata::read_sector(disk_idx, lba, &mut sec).is_err() {
-                        crate::print!("Failed to read partition sector\n");
-                        after_vfs_op();
-                        return;
-                    }
-
-                    unsafe {
-                        let copy_n = core::cmp::min(512, MAX_BYTES - written);
-                        let dst = &mut TMP_BUF[written..written + copy_n];
-                        dst.copy_from_slice(&sec[..copy_n]);
-                        written += copy_n;
-                    }
-                }
-
-                // Now call the requested fstype mount with the buffer
-                if let Some(ft) = fstype {
-                    match core::str::from_utf8(ft) {
-                        Ok("ext2") | Ok("Ext2") => {
-                            unsafe {
-                                // Diagnostic: print ext2 magic at superblock offset
-                                crate::drivers::serial::write_str("[mount] ext2 probe: written=");
-                                crate::drivers::serial::write_hex(written);
-                                crate::drivers::serial::write_str("\n");
-                                if written >= 2048 {
-                                    let magic_off = 1024 + 56;
-                                    let magic = ((TMP_BUF[magic_off + 1] as u16) << 8)
-                                        | (TMP_BUF[magic_off] as u16);
-                                    crate::drivers::serial::write_str("[mount] ext2 magic=0x");
-                                    crate::drivers::serial::write_hex(magic as usize);
-                                    crate::drivers::serial::write_str("\n");
-                                }
-
-                                if crate::fs::ext2::mount(&TMP_BUF[..written]) {
-                                    let _ = crate::fs::vfs::mount(
-                                        target_path,
-                                        crate::fs::vfs::VfsBackend::Ext2,
-                                    );
-                                    crate::kernel::write_raw("Mounted ext2/3 partition at ");
-                                    crate::kernel::write_raw(target_path);
-                                    crate::print!("\n");
-                                } else {
-                                    crate::print!("Failed to mount ext2/3 partition\n");
-                                }
-                            }
-                        }
-                        Ok("isofs") | Ok("iso9660") | Ok("iso") | Ok("cdrom") => unsafe {
-                            if crate::fs::isofs::mount(&TMP_BUF[..written]) {
-                                let _ = crate::fs::vfs::mount(
-                                    target_path,
-                                    crate::fs::vfs::VfsBackend::Isofs,
-                                );
-                                crate::kernel::write_raw("Mounted ISO9660 partition at ");
-                                crate::kernel::write_raw(target_path);
-                                crate::print!("\n");
-                            } else {
-                                crate::print!("Failed to mount ISO9660 partition\n");
-                            }
-                        },
-                        Ok("fat32") => {
-                            // for FAT32 we can mount the partition by loading sectors into fat32's Memory mount
-                            unsafe {
-                                if crate::fs::fat32::mount(&TMP_BUF[..written]) {
-                                    let _ = crate::fs::vfs::mount(
-                                        target_path,
-                                        crate::fs::vfs::VfsBackend::Fat32,
-                                    );
-                                    crate::kernel::write_raw("Mounted FAT32 partition at ");
-                                    crate::kernel::write_raw(target_path);
-                                    crate::print!("\n");
-                                } else {
-                                    crate::print!("Failed to mount FAT32 partition\n");
-                                }
-                            }
-                        }
-                        _ => {
-                            crate::print!("Unsupported filesystem type for /dev mounting\n");
-                        }
-                    }
-                } else {
-                    crate::print!("Specify filesystem type when mounting /dev devices\n");
-                }
-
-                after_vfs_op();
-                return;
-            }
-        }
     }
 
     mount_image_from_path(source, Some((target_path, fstype)));
@@ -1627,8 +1695,18 @@ fn lsdev() {
 
     let mut buf = [0u8; 20];
 
-    crate::kernel::write_raw(", SATA/AHCI: ");
-    crate::kernel::write_raw(crate::lib::u64_to_str(st.sata as u64, &mut buf));
+    let mut buf = [0u8; 20];
+
+    let pci = crate::drivers::pci::scan_storage();
+    crate::kernel::write_raw(", SATA/AHCI controllers: ");
+    crate::kernel::write_raw(crate::lib::u64_to_str(pci.sata as u64, &mut buf));
+
+    let sata_disks = crate::drivers::sata::drive_count();
+
+    let mut buf = [0u8; 20];
+
+    crate::kernel::write_raw(", SATA disks: ");
+    crate::kernel::write_raw(crate::lib::u64_to_str(sata_disks as u64, &mut buf));
 
     let mut buf = [0u8; 20];
 

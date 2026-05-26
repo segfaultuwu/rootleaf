@@ -88,6 +88,47 @@ pub fn mount_first_ata() -> Result<(), &'static str> {
     mount_ata(0)
 }
 
+pub fn mount_first_sata() -> Result<(), &'static str> {
+    if !crate::drivers::sata::is_available() {
+        return Err("No SATA/AHCI controller found");
+    }
+
+    const MAX_IMAGE_SIZE: usize = 64 * 1024 * 1024;
+    static mut SATA_DISK_IMAGE: [u8; MAX_IMAGE_SIZE] = [0; MAX_IMAGE_SIZE];
+
+    let sectors = MAX_IMAGE_SIZE / 512;
+
+    for i in 0..sectors {
+        let dst = unsafe {
+            core::slice::from_raw_parts_mut(
+                (core::ptr::addr_of_mut!(SATA_DISK_IMAGE) as *mut u8).add(i * 512),
+                512,
+            )
+        };
+
+        if crate::drivers::sata::read_sector(i as u64, dst).is_err() {
+            if i == 0 {
+                return Err("Failed to read SATA sector 0");
+            }
+
+            break;
+        }
+    }
+
+    let data = unsafe {
+        core::slice::from_raw_parts(
+            core::ptr::addr_of!(SATA_DISK_IMAGE) as *const u8,
+            MAX_IMAGE_SIZE,
+        )
+    };
+
+    if mount(data) {
+        Ok(())
+    } else {
+        Err("SATA disk is not a valid FAT32 image")
+    }
+}
+
 pub fn unmount() {
     unsafe {
         MOUNTED = None;

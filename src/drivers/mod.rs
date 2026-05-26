@@ -3,11 +3,16 @@ pub mod ata;
 pub mod graphics;
 pub mod keyboard;
 pub mod pci;
-pub mod serial;
 pub mod sata;
+pub mod serial;
 
 pub fn init() {
     serial::init();
-    sata::init();
+
+    crate::drivers::serial::write_str("Rootleaf: serial initialized\n");
+
+    ahci::init();
+
     keyboard::init();
+    crate::drivers::serial::write_str("Rootleaf: keyboard initialized\n");
 }

@@ -1,5 +1,6 @@
 pub mod elf64;
 pub mod input;
+pub mod kstring;
 pub mod panic;
 pub mod print;
 pub mod sync;

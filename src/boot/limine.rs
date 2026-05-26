@@ -11,3 +11,9 @@ pub static FRAMEBUFFER_REQUEST: FramebufferRequest = FramebufferRequest::new();
 
 pub static MEMORY_MAP_REQUEST: limine::request::MemmapRequest =
     limine::request::MemmapRequest::new();
+
+use limine::request::HhdmRequest;
+
+#[used]
+#[unsafe(link_section = ".requests")]
+pub static HHDM_REQUEST: HhdmRequest = HhdmRequest::new();
