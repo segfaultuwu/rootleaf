@@ -133,7 +133,7 @@ impl ConsoleDriver {
             ConsoleColor::DARK_BLUE,
         );
 
-        let mem = crate::kernel::memory::memory_info();
+        let mem = crate::memory::info::memory_info();
 
         let mut mem_buf = [0u8; 20];
         let mem_str = crate::lib::u64_to_str(mem.usable_mib(), &mut mem_buf);
@@ -250,18 +250,13 @@ impl ConsoleDriver {
     }
 
     pub fn prompt(&mut self) {
-        /*
-            Lepiej docelowo zmienić CURRENT_PATH na:
-                pub static CURRENT_PATH: &str = "0:\\>";
-            zamiast static mut.
-
-            Jeśli masz teraz `static mut CURRENT_PATH`, to zostawiam kompatybilność.
-        */
         self.write_colored(
             unsafe { crate::CURRENT_PATH },
             ConsoleColor::LIGHT_GREEN,
             ConsoleColor::BLACK,
         );
+
+        self.write_colored(">", ConsoleColor::LIGHT_GREEN, ConsoleColor::BLACK);
 
         self.write_byte(b' ');
     }

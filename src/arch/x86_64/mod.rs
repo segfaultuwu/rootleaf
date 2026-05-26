@@ -55,3 +55,29 @@ pub unsafe fn disable_interrupts() {
         core::arch::asm!("cli", options(nomem, nostack));
     }
 }
+
+use self::port::{inb, outb};
+
+const KEYBOARD_CONTROLLER_STATUS_PORT: u16 = 0x64;
+const KEYBOARD_CONTROLLER_COMMAND_PORT: u16 = 0x64;
+const KEYBOARD_CONTROLLER_RESET_COMMAND: u8 = 0xFE;
+
+pub fn reboot() -> ! {
+    unsafe {
+        // Poczekaj aż input buffer kontrolera 8042 będzie pusty.
+        while inb(KEYBOARD_CONTROLLER_STATUS_PORT) & 0x02 != 0 {}
+
+        // Komenda 0xFE prosi kontroler klawiatury o reset CPU.
+        outb(
+            KEYBOARD_CONTROLLER_COMMAND_PORT,
+            KEYBOARD_CONTROLLER_RESET_COMMAND,
+        );
+    }
+
+    // Fallback, jeśli reset przez 8042 nie zadziała.
+    loop {
+        unsafe {
+            core::arch::asm!("hlt", options(nomem, nostack));
+        }
+    }
+}

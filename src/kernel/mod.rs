@@ -1,5 +1,4 @@
 pub mod input;
-pub mod memory;
 pub mod panic;
 pub mod print;
 pub mod sync;

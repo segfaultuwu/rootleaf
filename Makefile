@@ -44,8 +44,6 @@ run: iso
 		-cdrom $(ISO) \
 		-m 256M \
 		-serial stdio \
-		-no-reboot \
-		-no-shutdown
 
 clean:
 	rm -rf target iso_root/boot/kernel.elf $(ISO)
